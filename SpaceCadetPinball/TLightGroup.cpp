@@ -16,8 +16,10 @@ TLightGroup::TLightGroup(TPinballTable* table, int groupIndex) : TPinballCompone
 	if (groupIndex > 0)
 	{
 		int count;
-		Timer1TimeDefault = *loader::query_float_attribute(groupIndex, 0, 903);
-		int16_t* groupIndArr = loader::query_iattribute(groupIndex, 1027, &count);
+		// 903 is the group's default sweep interval. Absent means the group has no
+		// interval of its own; callers always pass an explicit time or get 0.
+		Timer1TimeDefault = loader::query_float_attribute(groupIndex, 0, 903, 0.0f);
+		int16_t* groupIndArr = loader::query_iattribute_opt(groupIndex, 1027, &count);
 		for (int index = 0; index < count; ++groupIndArr)
 		{
 			auto comp = dynamic_cast<TLight*>(table->find_component(*groupIndArr));
@@ -55,6 +57,11 @@ int TLightGroup::Message(MessageCode code, float value)
 		}
 	case MessageCode::Reset:
 		Reset();
+		// Full Tilt zeroes MessageField here, between the virtual Reset and the
+		// per-player copy loop: 0x40bc45 call [vtable+0x18], 0x40bc4a call 0x413550.
+		// No-op on 3D Pinball data. The PlayerChanged arm above already keeps
+		// MessageField per player, which is what 0x40bbea call 0x413570 does.
+		FtPlayerFieldsReset();
 		for (auto index = 0; index < PinballTable->PlayerCount; index++)
 		{
 			auto playerPtr = &PlayerData[index];

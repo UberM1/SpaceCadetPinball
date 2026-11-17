@@ -28,11 +28,18 @@ int TSoloTarget::Message(MessageCode code, float value)
 		ActiveFlag = code == MessageCode::TSoloTargetEnable;
 		break;
 	case MessageCode::Reset:
+		// Full Tilt clears the per-player fields first, 0x414cc6 call 0x413550.
+		FtPlayerFieldsReset();
 		if (Timer)
 			timer::kill(Timer);
 		Timer = 0;
 		ActiveFlag = 1;
 		break;
+	case MessageCode::PlayerChanged:
+		// Full Tilt, 0x414bef -> 0x414cb1: the per-player MessageField swap
+		// (0x414cb8 call 0x413570) and nothing else, so no sprite update either.
+		FtPlayerFieldsSwap(value);
+		return 0;
 	default:
 		return 0;
 	}

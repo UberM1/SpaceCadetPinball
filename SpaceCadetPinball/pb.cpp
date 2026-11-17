@@ -23,6 +23,7 @@
 #include "GroupData.h"
 #include "partman.h"
 #include "score.h"
+#include "table_rules.h"
 #include "TFlipper.h"
 #include "TPinballTable.h"
 #include "TTextBox.h"
@@ -40,6 +41,7 @@ std::string pb::DatFileName, pb::BasePath;
 ImU32 pb::TextBoxColor;
 int pb::quickFlag = 0;
 TTextBox *pb::InfoTextBox, *pb::MissTextBox;
+int pb::AlternateBallSkin = 0;
 
 
 int pb::init()
@@ -54,7 +56,12 @@ int pb::init()
 	auto useBmpFont = 0;
 	get_rc_int(Msg::TextBoxUseBitmapFont, &useBmpFont);
 	if (useBmpFont)
+	{
 		score::load_msg_font("pbmsg_ft");
+		// The bonus tables' symbol font. Space Cadet's DAT has no such group and the
+		// call simply leaves the pointer null; see score.h.
+		score::load_glyph_font("font2");
+	}
 
 	if (!record_table)
 		return 1;
@@ -134,14 +141,12 @@ int pb::uninit()
 void pb::SelectDatFile(const std::vector<const char*>& dataSearchPaths)
 {
 	DatFileName.clear();
-	FullTiltDemoMode = FullTiltMode = false;
 
-	std::string datFileNames[3]
-	{
-		"CADET.DAT",
-		"PINBALL.DAT",
-		"DEMO.DAT",
-	};
+	// The candidates are the table registry's DAT names, in registry order, so a new
+	// table is added by registering it and not by editing this list.
+	size_t datFileCount;
+	auto registryNames = TableDatSearchOrder(datFileCount);
+	std::vector<std::string> datFileNames(registryNames, registryNames + datFileCount);
 
 	// Default game data test order: CADET.DAT, PINBALL.DAT, DEMO.DAT
 	if (options::Options.Prefer3DPBGameData)
@@ -169,16 +174,25 @@ void pb::SelectDatFile(const std::vector<const char*>& dataSearchPaths)
 				{
 					fclose(datFile);
 					DatFileName = fileName;
-					if (datFileName == "CADET.DAT")
-						FullTiltMode = true;
-					if (datFileName == "DEMO.DAT")
-						FullTiltDemoMode = FullTiltMode = true;
-					printf("Loading game from: %s\n", datFilePath.c_str());
+					SetCurrentTable(FindTableRulesForDat(datFileName.c_str()));
+					printf("Loading %s from: %s\n", CurrentTable->Name, datFilePath.c_str());
 					return;
 				}
 			}
 		}
 	}
+}
+
+void pb::SetCurrentTable(const TableRules* rules)
+{
+	// A DAT that matches no registry entry leaves the identity alone rather than
+	// nulling it: the engine would have nothing to ask about the table it loaded.
+	if (!rules)
+		return;
+
+	CurrentTable = rules;
+	FullTiltMode = rules->FullTiltData;
+	FullTiltDemoMode = rules->DemoData;
 }
 
 void pb::reset_table()
@@ -195,6 +209,10 @@ void pb::firsttime_setup()
 
 void pb::mode_change(GameModes mode)
 {
+	// pb::InfoTextBox / pb::MissTextBox are looked up by the hardcoded group names
+	// "info_text_box" and "mission_text_box". Dragon's Keep and Skulduggery have the
+	// first and not the second, so every use of either must tolerate a null: a table
+	// without that display simply shows no text there.
 	if (CreditsActive && MissTextBox)
 		MissTextBox->Clear(true);
 	CreditsActive = false;
@@ -247,8 +265,10 @@ void pb::toggle_demo()
 		demo_mode = false;
 		MainTable->Message(MessageCode::Reset, 0.0);
 		mode_change(GameModes::GameOver);
-		MissTextBox->Clear();
-		InfoTextBox->Display(get_rc_string(Msg::STRING125), -1.0);
+		if (MissTextBox)
+			MissTextBox->Clear();
+		if (InfoTextBox)
+			InfoTextBox->Display(get_rc_string(Msg::STRING125), -1.0);
 	}
 	else
 	{
@@ -282,8 +302,71 @@ void pb::ballset(float dx, float dy)
 	}
 }
 
+// ---- FTDBG: temporary autodrain harness (remove before finishing) ----
+#include "TDrain.h"
+#include "FtAccelDebug.h"
+void ft_autodrain_tick(float dtSec)
+{
+	static int enabled = -1;
+	if (enabled < 0)
+		enabled = getenv("FT_AUTODRAIN") ? 1 : 0;
+	if (!enabled)
+		return;
+
+	static float t = 0.0f;
+	static int stage = 0;
+	t += dtSec;
+
+	auto table = pb::MainTable;
+	if (!table)
+		return;
+
+	if (stage == 0 && t > 1.0f)
+	{
+		fprintf(stderr, "DBG-auto t=%.1f new game\n", t);
+		pb::replay_level(false);
+		stage = 1;
+		return;
+	}
+	if (stage == 1 && t > 2.5f)
+	{
+		fprintf(stderr, "DBG-auto t=%.1f launch, multiball=%d ballcount=%d\n",
+		        t, table->MultiballCount, table->BallCount);
+		pb::launch_ball();
+		stage = 2;
+		return;
+	}
+	if (stage >= 2 && t > 2.5f + 8.0f * static_cast<float>(stage - 1))
+	{
+		TBall* victim = nullptr;
+		for (auto ball : table->BallList)
+			if (ball->ActiveFlag)
+			{
+				victim = ball;
+				break;
+			}
+		fprintf(stderr, "DBG-auto t=%.1f stage=%d DRAIN victim=%p multiball=%d ballcount=%d extra=%d player=%d/%d\n",
+		        t, stage, static_cast<void*>(victim), table->MultiballCount, table->BallCount,
+		        table->ExtraBalls, table->CurrentPlayer, table->PlayerCount);
+		if (victim && table->Drain)
+		{
+			vector2 dummy{0.0f, 0.0f};
+			table->Drain->Collision(victim, &dummy, &dummy, 0.0f, nullptr);
+		}
+		else
+		{
+			fprintf(stderr, "DBG-auto     no active ball to drain\n");
+			pb::launch_ball();
+		}
+		stage++;
+	}
+}
+// ---- end FTDBG ----
+
 void pb::frame(float dtMilliSec)
 {
+	ft_autodrain_tick(dtMilliSec*0.001f);
+	ft_accel_tick(dtMilliSec*0.001f); // FTDBG
 	if (dtMilliSec > 100)
 		dtMilliSec = 100;
 	if (dtMilliSec <= 0)
@@ -294,7 +377,11 @@ void pb::frame(float dtMilliSec)
 		IdleTimerMs += dtMilliSec;
 		if (IdleTimerMs >= 60000 && !CreditsActive)
 		{
-			PushCheat("credits");
+			// Straight to the backdoor, not through PushCheat: the idle scroll is the
+			// engine's (0x422b80 case 0x68), not something typed, and must not reach a
+			// table's key handler, where it would reset a half-typed code.
+			for (auto ch : std::string("credits"))
+				control::pbctrl_bdoor_controller(ch);
 		}
 	}
 
@@ -326,7 +413,8 @@ void pb::frame(float dtMilliSec)
 	{
 		if (nudge::nudge_count > 0.5f)
 		{
-			InfoTextBox->Display(get_rc_string(Msg::STRING126), 2.0);
+			if (InfoTextBox)
+				InfoTextBox->Display(get_rc_string(Msg::STRING126), 2.0);
 		}
 		if (nudge::nudge_count > 1.0f)
 			MainTable->tilt(time_now);
@@ -486,13 +574,16 @@ void pb::timed_frame(float timeDelta)
 void pb::pause_continue()
 {
 	winmain::single_step ^= true;
-	InfoTextBox->Clear();
-	MissTextBox->Clear();
+	if (InfoTextBox)
+		InfoTextBox->Clear();
+	if (MissTextBox)
+		MissTextBox->Clear();
 	if (winmain::single_step)
 	{
 		if (MainTable)
 			MainTable->Message(MessageCode::Pause, time_now);
-		InfoTextBox->Display(get_rc_string(Msg::STRING123), -1.0);
+		if (InfoTextBox)
+			InfoTextBox->Display(get_rc_string(Msg::STRING123), -1.0);
 		midi::music_stop();
 		Sound::Deactivate();
 	}
@@ -514,7 +605,8 @@ void pb::pause_continue()
 				textTime = 5.0;
 				text = get_rc_string(Msg::STRING124);
 			}
-			InfoTextBox->Display(text, textTime);
+			if (InfoTextBox)
+				InfoTextBox->Display(text, textTime);
 		}
 		if (options::Options.Music && !winmain::single_step)
 			midi::music_play();
@@ -526,6 +618,18 @@ void pb::loose_focus()
 {
 	if (MainTable)
 		MainTable->Message(MessageCode::LooseFocus, time_now);
+}
+
+// An SDL keycode as the 1996 key handlers saw keys: a Windows virtual-key code. SDL
+// names letter keys by their lower-case character and VK by the upper-case one; digits,
+// space and tab are the same number in both. Everything else passes through, which the
+// handlers' jump tables (indexed by key - 0x31, bounded at 0x27) treat as "not a cheat
+// letter", exactly as they treated the VK codes those keys had.
+static int TableKeyCode(int sdlKey)
+{
+	if (sdlKey >= 'a' && sdlKey <= 'z')
+		return sdlKey - 'a' + 'A';
+	return sdlKey;
 }
 
 void pb::InputUp(GameInput input)
@@ -579,10 +683,30 @@ void pb::InputDown(GameInput input)
 		return;
 
 	if (CreditsActive)
-		MissTextBox->Clear(true);
+		if (MissTextBox)
+			MissTextBox->Clear(true);
 	CreditsActive = false;
 	IdleTimerMs = 0;
 
+	// The bonus tables' own key handler (DRAGON.EXE 0x4282c0, PIRATES.EXE 0x42a830),
+	// which the Full Tilt keydown calls first (0x412154), ahead of its "hidden test"
+	// matcher and the flipper dispatch. It holds the flipper fast-forward of the bonus
+	// count, so a flipper bound to a gamepad or mouse button reaches it as well.
+	if (CurrentTable->KeyHandler)
+	{
+		bool flipper = false;
+		for (const auto binding : bindings)
+			if (binding == GameBindings::LeftFlipper || binding == GameBindings::RightFlipper)
+				flipper = true;
+		if (input.Type == InputTypes::Keyboard)
+			CurrentTable->KeyHandler(TableKeyCode(input.Value), flipper);
+		else if (flipper)
+			CurrentTable->KeyHandler(0, true);
+	}
+
+	// On the bonus tables the backdoor keeps only its table-agnostic arms -- "hidden
+	// test", the Full Tilt engine's own 0x411f50, and the idle credits -- and every
+	// Space Cadet cheat is skipped there; see pbctrl_bdoor_controller.
 	if (input.Type == InputTypes::Keyboard)
 		control::pbctrl_bdoor_controller(static_cast<char>(input.Value));
 
@@ -634,7 +758,11 @@ void pb::InputDown(GameInput input)
 				break;
 			}
 		case 'r':
-			control::cheat_bump_rank();
+			// Space Cadet's rank, through its `middle_circle` tag, which no bonus table
+			// binds. The Full Tilt engine's own cheat keys (0x4121d0: B, I, J, F11, F12)
+			// have no rank key either, so on the bonus tables this key does nothing.
+			if (!CurrentTable->KeyHandler)
+				control::cheat_bump_rank();
 			break;
 		case 's':
 			MainTable->AddScore(static_cast<int>(RandFloat() * 1000000.0f));
@@ -728,7 +856,8 @@ void pb::high_scores()
 void pb::tilt_no_more()
 {
 	if (MainTable->TiltLockFlag)
-		InfoTextBox->Clear();
+		if (InfoTextBox)
+			InfoTextBox->Clear();
 	MainTable->TiltLockFlag = 0;
 	nudge::nudge_count = -2.0;
 }
@@ -745,14 +874,36 @@ bool pb::chk_highscore()
 	return false;
 }
 
+// Types a cheat as if from the keyboard. On a table with its own key handler the
+// characters go to it first, as typed keys do, so the Cheats menu's "1max" and "quote"
+// run Dragon's Keep's and Skulduggery's own 1MAX and QUOTE, and "gmax" Skulduggery's
+// GMAX; the backdoor then sees them too, for "hidden test". Never a flipper.
 void pb::PushCheat(const std::string& cheat)
 {
 	for (auto ch : cheat)
+	{
+		if (CurrentTable->KeyHandler)
+			CurrentTable->KeyHandler(TableKeyCode(static_cast<unsigned char>(ch)), false);
 		control::pbctrl_bdoor_controller(ch);
+	}
 }
 
 LPCSTR pb::get_rc_string(Msg uID)
 {
+	// The bonus tables name their messages by the resource ids of their own
+	// executables (1001..3076), not by the shared `Msg` enum, which holds Space
+	// Cadet's string table and nothing else. Without this every Dragon's Keep and
+	// Skulduggery display resolved to translations.cpp's "!Missing MsgId!" and that
+	// placeholder is what the text box drew.
+	//
+	// The table's own strings win, and only a table that has them has any: Space
+	// Cadet's three registry rows carry none, so every id it asks for still goes
+	// through translations.cpp and stays localisable. The ranges do not overlap
+	// either -- `Msg` runs 0..Max, a couple of hundred, and no table string is
+	// below 1001 -- so the order of the two lookups is belt and braces.
+	if (auto text = FindRcString(CurrentTable, static_cast<int>(uID)))
+		return text;
+
 	return translations::GetTranslation(uID);
 }
 

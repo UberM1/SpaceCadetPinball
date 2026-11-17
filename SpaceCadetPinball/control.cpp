@@ -1,8 +1,10 @@
 #include "pch.h"
 #include "control.h"
+#include "FtAccelDebug.h" // FTDBG
 
 #include "midi.h"
 #include "pb.h"
+#include "table_rules.h"
 #include "TBall.h"
 #include "TBlocker.h"
 #include "TBumper.h"
@@ -843,26 +845,75 @@ std::reference_wrapper<TLight*> control::WormholeLightArray2[3] =
 };
 
 
+// The current table's bindings, or Space Cadet's. CurrentTable is never null --
+// table_rules.cpp seeds it with 3D Pinball's entry -- but a table registered with
+// no rules behind it has null arrays, and then there is nothing to walk and the
+// playfield loads without scoring.
 void control::make_links(TPinballTable* table)
 {
 	TableG = table;
 
-	for (auto& score_component : score_components)
+	auto* scores = CurrentTable->ScoreComponents;
+	for (size_t i = 0; i < CurrentTable->ScoreComponentCount && scores; i++)
 	{
-		auto linkedComp = make_component_link(score_component.Tag);
+		auto linkedComp = make_component_link(scores[i].Tag);
 		if (linkedComp)
 		{
-			linkedComp->Control = &score_component.Control;
+			linkedComp->Control = &scores[i].Control;
 		}
 	}
 
-	for (auto& simple_component : simple_components)
-		make_component_link(*simple_component);
+	auto** simples = CurrentTable->SimpleComponents;
+	for (size_t i = 0; i < CurrentTable->SimpleComponentCount && simples; i++)
+		if (simples[i])
+			make_component_link(*simples[i]);
+
+	if (ft_accel_enabled() || ft_autoplay_enabled()) // FTDBG
+	{
+		for (size_t i = 0; i < CurrentTable->ScoreComponentCount && scores; i++)
+			if (!scores[i].Tag.GetComponent())
+				fprintf(stderr, "DBG-link  UNLINKED score  %s\n", scores[i].Tag.Name);
+		for (size_t i = 0; i < CurrentTable->SimpleComponentCount && simples; i++)
+			if (simples[i] && !simples[i]->GetComponent())
+				fprintf(stderr, "DBG-link  UNLINKED simple %s\n", simples[i]->Name);
+	}
+
+
+	// This file is Space Cadet's rule set, but parts of it run on every table: the
+	// backdoor's idle "credits" and "quote" scrolls, the cheats, the high-score check.
+	// Those reach 88 unguarded mission_text_box->Display() calls and a handful of
+	// info_text_box ones, all of which assume Space Cadet's two text boxes exist.
+	//
+	// Neither bonus table has a "mission_text_box" group -- both send everything to
+	// their single TTextBox -- and neither binds Space Cadet's tags at all, because
+	// make_links walks CurrentTable's own component arrays. So both tags are null and
+	// the idle credits scroll crashed Dragon's Keep.
+	//
+	// pb::InfoTextBox is the box TPinballTable found by name just before calling us,
+	// whichever table is loaded, so it is the one display every table certainly has.
+	if (!control_info_text_box_tag.Component)
+		control_info_text_box_tag.Component = pb::InfoTextBox;
+	if (!control_mission_text_box_tag.Component)
+		control_mission_text_box_tag.Component = pb::InfoTextBox;
 }
 
 void control::ClearLinks()
 {
 	TableG = nullptr;
+
+	// The table being torn down is still the current one, so this clears what
+	// make_links bound. Space Cadet's own arrays are cleared unconditionally as
+	// well: its tags are statics that outlive any one table, and a run that
+	// switched tables would otherwise leave them pointing at freed components.
+	auto* scores = CurrentTable->ScoreComponents;
+	for (size_t i = 0; i < CurrentTable->ScoreComponentCount && scores; i++)
+		scores[i].Tag.SetComponent(nullptr);
+
+	auto** simples = CurrentTable->SimpleComponents;
+	for (size_t i = 0; i < CurrentTable->SimpleComponentCount && simples; i++)
+		if (simples[i])
+			simples[i]->SetComponent(nullptr);
+
 	for (auto& component : score_components)
 		component.Tag.SetComponent(nullptr);
 	for (auto& component : simple_components)
@@ -889,15 +940,33 @@ TPinballComponent* control::make_component_link(component_tag_base& tag)
 	return nullptr;
 }
 
+// The component's own handler and the table's mode machine, in the table's own
+// order. Space Cadet runs the component first and MissionControl after; both bonus
+// tables run the mode machine first (DRAGON.EXE 0x423060, PIRATES.EXE 0x423080),
+// which is what lets their handlers suppress their own scoring during a mode.
+//
+// Skulduggery's dispatcher also forces state 2 and re-dispatches after a teardown.
+// That loop is inside pirates::Handler, where the original has it, and must not be
+// repeated here.
 void control::handler(MessageCode code, TPinballComponent* cmp)
 {
-	component_control* control = cmp->Control;
-	
+	auto* mode = CurrentTable->ModeControl;
+	component_control* control = cmp ? cmp->Control : nullptr;
+
+	if (mode && CurrentTable->ModeBeforeComponent)
+	{
+		mode(code, cmp);
+		if (control)
+			control->ControlFunc(code, cmp);
+		return;
+	}
+
 	if (control)
 	{
 		control->ControlFunc(code, cmp);
 	}
-	MissionControl(code, cmp);
+	if (mode)
+		mode(code, cmp);
 }
 
 void control::pbctrl_bdoor_controller(char key)
@@ -959,28 +1028,38 @@ void control::pbctrl_bdoor_controller(char key)
 	std::memmove(&cheatBuffer[0], &cheatBuffer[1], 10);
 	cheatBuffer[10] = key;
 
+	// A table with its own key handler (Dragon's Keep 0x4282c0, Skulduggery 0x42a830)
+	// has its own codes, and pb.cpp hands it every key before this. What is left here
+	// for it is what the Full Tilt engine does for every table: "hidden test" (the
+	// engine's matcher at 0x411f50, which also sets CheatsUsed) and the idle credits
+	// (0x422b80 case 0x68). The Space Cadet cheats are skipped: gmax, 1max, rmax and
+	// easy mode go through tags -- GravityWellKickoutControl's lights, soundwave28,
+	// middle_circle, block1, gate1/gate2 -- that the bonus tables leave null, and bmax
+	// sets a flag only Space Cadet's drain reads. "quote" is the table's own QUOTE.
+	const bool spaceCadetCheats = !CurrentTable->KeyHandler;
+
 	if (strcmp(bufferEnd - 11, "hidden test") == 0 ||
 		strcmp(bufferEnd - 11, "hidden\ttest") == 0)
 	{
 		pb::cheat_mode ^= true;
 	}
-	else if (strcmp(bufferEnd - 4, "gmax") == 0)
+	else if (spaceCadetCheats && strcmp(bufferEnd - 4, "gmax") == 0)
 	{
 		GravityWellKickoutControl(MessageCode::ControlEnableMultiplier, nullptr);
 	}
-	else if (strcmp(bufferEnd - 4, "1max") == 0)
+	else if (spaceCadetCheats && strcmp(bufferEnd - 4, "1max") == 0)
 	{
 		table_add_extra_ball(2.0);
 	}
-	else if (strcmp(bufferEnd - 4, "bmax") == 0)
+	else if (spaceCadetCheats && strcmp(bufferEnd - 4, "bmax") == 0)
 	{
 		table_unlimited_balls ^= true;
 	}
-	else if (strcmp(bufferEnd - 4, "rmax") == 0)
+	else if (spaceCadetCheats && strcmp(bufferEnd - 4, "rmax") == 0)
 	{
 		cheat_bump_rank();
 	}
-	else if (pb::FullTiltMode && strcmp(bufferEnd - 5, "quote") == 0)
+	else if (spaceCadetCheats && pb::FullTiltMode && strcmp(bufferEnd - 5, "quote") == 0)
 	{
 		// Developer easter egg type 'cheat' from Full Tilt
 		float time = 0;
@@ -997,7 +1076,7 @@ void control::pbctrl_bdoor_controller(char key)
 		pb::CreditsActive = true;
 		return;
 	}
-	else if (strcmp(bufferEnd - 9, "easy mode") == 0)
+	else if (spaceCadetCheats && strcmp(bufferEnd - 9, "easy mode") == 0)
 	{
 		easyMode ^= true;
 		if (easyMode) 
@@ -1112,9 +1191,43 @@ void control::cheat_bump_rank()
 
 void control::UnstuckBall(TBall& ball, int dt)
 {
-	if (!CheckBallInControlBounds(ball, *flip1) &&
-		!CheckBallInControlBounds(ball, *flip2) &&
-		!CheckBallInControlBounds(ball, *plunger))
+	// This guard decides whether a ball that is not moving is *legitimately* still --
+	// held on a flipper, or sitting in the plunger lane -- or genuinely stuck. Get it
+	// wrong in the permissive direction and nothing happens; get it wrong here and a
+	// ball resting where it belongs is shoved every 0.6 s and then, past twenty
+	// frames, destroyed and re-served.
+	//
+	// Which is what happened. The plunger clause tested the `plunger` tag -- Space
+	// Cadet's group name, and null on both bonus tables, where the groups are
+	// `s_plunger1` and `s_launcher1`. A null tag fails the clause, so the guard never
+	// protected the lane: on Dragon's Keep a served ball jittered in place over a
+	// 0.160-unit span with its StuckCounter climbing, and at twenty frames it was
+	// destroyed and relaunched. That is the "the ball moves a bit in the launch
+	// cockpit", the "sometimes it does not launch" and the "the new ball launches
+	// itself" all at once. The relaunch a dozen lines down already went through
+	// TPinballTable::Plunger; only the guard was left behind.
+	//
+	// TPinballTable::Plunger is right for every table: TPinballTable's spawn switch
+	// stores both object type 1001 and Skulduggery's 1034 launcher into it, which is
+	// what CADET.EXE's own constructor at 0x41a290 does.
+	//
+	// `flip1` and `flip2` are Space Cadet's tags and null on the bonus tables, whose
+	// own lists come from TableRules. DRAGON.EXE's UnstuckBall (0x42c320) makes four
+	// CheckBallInControlBounds calls where CADET.EXE's (0x42ab40) makes three:
+	// a_flip1, a_flip3, a_flip2 and s_plunger1 -- three of its four flippers, so
+	// "every flipper" would not be faithful. PIRATES.EXE's (0x42db30) makes seven:
+	// a_flip1, a_flip3, a_flip2, a_flip4, s_launcher1, s_oneway12 and a_kick1.
+	auto* plungerBounds = static_cast<TCollisionComponent*>(TableG->Plunger);
+	bool held = (flip1 && CheckBallInControlBounds(ball, *flip1)) ||
+		(flip2 && CheckBallInControlBounds(ball, *flip2)) ||
+		(plungerBounds && CheckBallInControlBounds(ball, *plungerBounds));
+	for (auto bounds : TableG->UnstuckBounds)
+	{
+		if (held)
+			break;
+		held = CheckBallInControlBounds(ball, *bounds);
+	}
+	if (!held)
 	{
 		if (ball.StuckCounter <= 20)
 		{
@@ -1125,7 +1238,13 @@ void control::UnstuckBall(TBall& ball, int dt)
 		{
 			ball.Disable();
 			TableG->MultiballCount--;
-			plunger->Message(MessageCode::PlungerRelaunchBall, 0);
+
+			// Not the `plunger` tag: that is Space Cadet's group name and is null on
+			// both bonus tables, which is what used to kill Skulduggery here as soon
+			// as a ball sat still for 20 frames. TPinballTable::Plunger is built from
+			// the DAT's own plunger object, so every table has one.
+			if (TableG->Plunger)
+				TableG->Plunger->Message(MessageCode::PlungerRelaunchBall, 0);
 		}
 	}
 }
@@ -2901,6 +3020,16 @@ void control::BallDrainControl(MessageCode code, TPinballComponent* caller)
 
 void control::table_control_handler(MessageCode code)
 {
+	// A table with its own table-level handler runs that and nothing else: the body
+	// below is Space Cadet's, and `lite77` is not bound on any other table.
+	if (CurrentTable->TableControl)
+	{
+		CurrentTable->TableControl(code);
+		return;
+	}
+	if (CurrentTable->ScoreComponents != score_components)
+		return;
+
 	if (code == MessageCode::SetTiltLock)
 	{
 		table_unlimited_balls = false;

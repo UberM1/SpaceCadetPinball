@@ -4,6 +4,7 @@
 
 #include "control.h"
 #include "loader.h"
+#include "pb.h"
 #include "render.h"
 #include "TBall.h"
 #include "timer.h"
@@ -17,21 +18,22 @@ TFlagSpinner::TFlagSpinner(TPinballTable* table, int groupIndex) : TCollisionCom
 
 	Timer = 0;
 	loader::query_visual(groupIndex, 0, &visual);
-	end.X = visual.FloatArr[0];
-	end.Y = visual.FloatArr[1];
-	start.X = visual.FloatArr[2];
-	start.Y = visual.FloatArr[3];
-	auto line = new TLine(this, &ActiveFlag, visual.CollisionGroup, start, end);
-	if (line)
+	// FloatArr is null when the group has no line geometry. The two collider lines
+	// below are the spinner's whole physical presence; with no endpoints, install none
+	// and let it be a prop. Falls through to the speed attributes, which have their own
+	// upstream defaults.
+	if (visual.FloatArr)
 	{
+		end.X = visual.FloatArr[0];
+		end.Y = visual.FloatArr[1];
+		start.X = visual.FloatArr[2];
+		start.Y = visual.FloatArr[3];
+		auto line = new TLine(this, &ActiveFlag, visual.CollisionGroup, start, end);
 		line->place_in_grid(&AABB);
 		EdgeList.push_back(line);
-	}
 
-	line = new TLine(this, &ActiveFlag, visual.CollisionGroup, end, start);
-	PrevCollider = line;
-	if (line)
-	{
+		line = new TLine(this, &ActiveFlag, visual.CollisionGroup, end, start);
+		PrevCollider = line;
 		line->place_in_grid(&AABB);
 		EdgeList.push_back(line);
 	}
@@ -39,13 +41,13 @@ TFlagSpinner::TFlagSpinner(TPinballTable* table, int groupIndex) : TCollisionCom
 	SpeedDecrement = 0.64999998f;
 	MaxSpeed = 50000.0f;
 	MinSpeed = 5.0f;
-	auto speedDec = loader::query_float_attribute(groupIndex, 0, 1202);
+	auto speedDec = loader::query_float_attribute_opt(groupIndex, 0, 1202);
 	if (speedDec)
 		SpeedDecrement = *speedDec;
-	auto maxSpeed = loader::query_float_attribute(groupIndex, 0, 1200);
+	auto maxSpeed = loader::query_float_attribute_opt(groupIndex, 0, 1200);
 	if (maxSpeed)
 		MaxSpeed = *maxSpeed;
-	auto minSpeed = loader::query_float_attribute(groupIndex, 0, 1201);
+	auto minSpeed = loader::query_float_attribute_opt(groupIndex, 0, 1201);
 	if (minSpeed)
 		MinSpeed = *minSpeed;
 }
@@ -61,6 +63,19 @@ int TFlagSpinner::Message(MessageCode code, float value)
 		}
 		BmpIndex = 0;
 		SpriteSet(BmpIndex);
+		// 0x41481f call 0x413550, after the timer kill and before the sprite reset.
+		FtPlayerFieldsReset();
+	}
+	else if (code == MessageCode::PlayerChanged && pb::FullTiltMode)
+	{
+		// Full Tilt, 0x414889: kill the spin timer (0x41489b) and swap the per-player
+		// MessageField (0x4148b1 call 0x413570). The flag is left where it is.
+		if (Timer)
+		{
+			timer::kill(Timer);
+			Timer = 0;
+		}
+		FtPlayerFieldsSwap(value);
 	}
 	return 0;
 }
@@ -89,7 +104,10 @@ void TFlagSpinner::NextFrame()
 {
 	BmpIndex += SpinDirection;
 	int bmpIndex = BmpIndex;
-	int bmpCount = static_cast<int>(ListBitmap->size());
+	// A spinner with no sprite list has no frames to advance through.
+	int bmpCount = ListBitmap ? static_cast<int>(ListBitmap->size()) : 0;
+	if (bmpCount <= 0)
+		return;
 	if (bmpIndex >= bmpCount)
 		BmpIndex = 0;
 	else if (bmpIndex < 0)

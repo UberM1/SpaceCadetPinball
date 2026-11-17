@@ -8,6 +8,7 @@ class TPinballTable;
 class DatFile;
 class TBall;
 class TTextBox;
+struct TableRules;
 enum class Msg : int;
 
 enum class GameModes
@@ -50,11 +51,25 @@ public:
 	static bool cheat_mode, CreditsActive;
 	static DatFile* record_table;
 	static TPinballTable* MainTable;
+	// Derived from CurrentTable's FullTiltData / DemoData, written only by
+	// SelectDatFile. They survive because ~25 sites read them and every one asks
+	// about the data format, not about which table is loaded -- a question that
+	// stays two-valued however many tables there are. CurrentTable is the identity.
 	static bool FullTiltMode, FullTiltDemoMode;
 	static std::string DatFileName, BasePath;
 	static ImU32 TextBoxColor;
 	static int quickFlag;
 	static TTextBox *InfoTextBox, *MissTextBox;
+	// The Full Tilt engine's alternate-ball-skin switch: DRAGON.EXE 0x438140, PIRATES.EXE
+	// 0x439140, the same engine cell at each build's own data address. Toggled by Dragon's
+	// "PB" and Skulduggery's "GMAX" codes (0x42836a, 0x42aa3e: `eax = 1 - [cell]`). Its only
+	// reader is the TBall constructor (0x4028bb in both), which copies it into the loader's
+	// bitmap-select cell (0x4387c8 / 0x4397c8) so the ball groups' second bitmap per
+	// resolution -- the smiley, the brass ball -- is fetched, and clears it again when a
+	// state has no alternate. The port's GroupData keeps only the first bitmap (see
+	// GroupData.cpp's "bitmap override" note) and its TBall does not read this, so for now
+	// the switch is recorded and has no visible effect.
+	static int AlternateBallSkin;
 
 	static int init();
 	static int uninit();
@@ -82,6 +97,9 @@ public:
 	static std::string make_path_name(const std::string& fileName);
 	static void ShowMessageBox(Uint32 flags, LPCSTR title, LPCSTR message);
 private:
+	// The one writer of CurrentTable, and so of FullTiltMode / FullTiltDemoMode.
+	static void SetCurrentTable(const TableRules* rules);
+
 	static bool demo_mode;
 	static float IdleTimerMs;
 	static float BallToBallCollision(const ray_type& ray, const TBall& ball, TEdgeSegment** edge, float collisionDistance);

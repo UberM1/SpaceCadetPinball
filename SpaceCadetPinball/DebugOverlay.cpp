@@ -265,7 +265,10 @@ void DebugOverlay::DrawBallDepthSteps()
 		auto visualCount = loader::query_visual_states(ball->GroupIndex);
 		for (auto index = 0; index < visualCount; ++index)
 		{
-			auto depthPt = reinterpret_cast<vector3*>(loader::query_float_attribute(ball->GroupIndex, index, 501));
+			// Debug-only read of the per-state visual offset; may be absent (see TBall).
+			auto depthPt = reinterpret_cast<vector3*>(loader::query_float_attribute_opt(ball->GroupIndex, index, 501));
+			if (!depthPt)
+				continue;
 			auto pt = proj::xform_to_2d(*depthPt);
 
 			// Snap X coordinate to edge box sides

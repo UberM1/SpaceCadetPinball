@@ -43,6 +43,15 @@ struct component_tag : component_tag_base
 	void SetComponent(TPinballComponent* comp) override
 	{
 		Component = dynamic_cast<T*>(comp);
+
+		// A tag typed more narrowly than the object binds to nullptr here, and the
+		// assert below is a no-op in a release build -- so the rules get a null they
+		// then dereference, far from the cause. Dragon's Keep's light_sweeps was
+		// declared component_tag<TLightGroup> after type 1038 gained its real class
+		// TLightSweep, which derives from TPinballComponent instead; Slay Dragon
+		// segfaulted on its fire sweep. Say so out loud rather than binding silently.
+		if (comp && !Component)
+			fprintf(stderr, "control: tag \"%s\" has the wrong component type\n", Name);
 		if (comp)
 			assertm(Component, "Wrong component type");
 	}

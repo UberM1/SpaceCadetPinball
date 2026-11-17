@@ -91,6 +91,14 @@ enum class MidiTracks
 	Track3
 };
 
+// A table's music track by index, 1-based, 0 meaning silence.
+//
+// MidiTracks fixes Space Cadet's three at compile time. Skulduggery ships TABB1..TABB6
+// and Dragon's Keep TABC1..TABC7, and their rules choose a track per mode, so the count
+// cannot be a constant and the selection cannot be an enumerator.
+using music_track = int;
+constexpr music_track no_music = 0;
+
 class midi
 {
 public:
@@ -101,8 +109,20 @@ public:
 	static void SetVolume(int volume);
 	static bool play_track(MidiTracks track, bool replay);
 	static MidiTracks get_active_track();
+
+	// Loads <prefix>1..<prefix><count> in place of the fixed three. Called with the
+	// current table's MusicPrefix and MusicTrackCount.
+	static void load_table_tracks(const char* prefix, int count);
+
+	// Indexed playback, for tables whose rules pick a track per mode.
+	static void PlayMusic(music_track track);
+	static music_track CurrentMusic();
 private:
 	static std::vector<Mix_Music*> LoadedTracks;
+	static std::vector<Mix_Music*> TableTracks;
+	static music_track ActiveTableTrack;
+	static bool TableTrackAudible;
+	static void StartTableTrack();
 	static Mix_Music* track1, * track2, * track3;
 	static MidiTracks active_track, NextTrack;
 	static int Volume;

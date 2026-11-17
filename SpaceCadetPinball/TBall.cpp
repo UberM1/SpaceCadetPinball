@@ -39,8 +39,13 @@ TBall::TBall(TPinballTable* table, int groupIndex) : TCollisionComponent(table, 
 		HasGroupFlag = true;
 		loader::query_visual(groupIndex, 0, &visual);
 		CollisionMask = visual.CollisionGroup;
-		auto floatArr = loader::query_float_attribute(groupIndex, 0, 408);
-		Position = {floatArr[0], floatArr[1], floatArr[3]};
+		// Attribute 408 is the ball's start position. Absent means the group carries no
+		// position -- use the origin, exactly as the groupIndex == -1 path above does.
+		auto floatArr = loader::query_float_attribute_opt(groupIndex, 0, 408);
+		if (floatArr)
+			Position = {floatArr[0], floatArr[1], floatArr[3]};
+		else
+			Position = {0, 0, 0};
 	}
 
 	/*Full tilt: ball is ballN, where N[0,2] resolution*/
@@ -51,16 +56,23 @@ TBall::TBall(TPinballTable* table, int groupIndex) : TCollisionComponent(table, 
 		groupIndex = loader::query_handle(ballGroupName);
 	}
 
-	Radius = *loader::query_float_attribute(groupIndex, 0, 500);
+	// Attribute 500 is the ball radius. Every table in both games has it on the "ball"
+	// group; a table without it is not a pinball table. Guarded only so the miss is a
+	// zero-radius ball and a reported error rather than a null dereference -- no radius
+	// is invented here, because any number picked would silently change every wall
+	// offset on the playfield (CollisionCompOffset below).
+	auto radiusArr = loader::query_float_attribute(groupIndex, 0, 500);
+	Radius = radiusArr ? *radiusArr : 0.0f;
 
 	auto visualCount = loader::query_visual_states(groupIndex);
 	for (auto index = 0; index < visualCount; ++index)
 	{
 		loader::query_visual(groupIndex, index, &visual);
 		ListBitmap->push_back(visual.Bitmap);
-		auto visVec = reinterpret_cast<vector3*>(loader::query_float_attribute(groupIndex, index, 501));
-		auto zDepth = proj::z_distance(*visVec);
-		VisualZArray[index] = zDepth;
+		// 501 is the per-state visual offset used only to precompute a render depth.
+		// Absent means this ball state has no offset: depth 0, no feature to skip.
+		auto visVec = reinterpret_cast<vector3*>(loader::query_float_attribute_opt(groupIndex, index, 501));
+		VisualZArray[index] = visVec ? proj::z_distance(*visVec) : 0.0f;
 	}
 	RenderSprite = new render_sprite(VisualTypes::Ball, nullptr, nullptr, 0, 0, nullptr);
 	PinballTable->CollisionCompOffset = Radius;
@@ -82,7 +94,7 @@ void TBall::Repaint()
 	auto zDepth = proj::z_distance(Position);
 
 	auto index = 0u;
-	for (; index < ListBitmap->size() - 1; ++index)
+	for (; ListBitmap && index + 1 < ListBitmap->size(); ++index)
 	{
 		if (VisualZArray[index] <= zDepth) break;
 	}
@@ -120,7 +132,11 @@ bool TBall::already_hit(const TEdgeSegment& edge) const
 
 int TBall::Message(MessageCode code, float value)
 {
-	if (code == MessageCode::Reset)
+	// 0x402aa0 in CADET.EXE: `cmp [esi+0x153],ebx; jne` -- a ball the table placed
+	// (a captive ball, built from its own DAT group) is not reset. Upstream has no
+	// such ball and no such test; without it NewGame switched Skulduggery's captive
+	// ball off and parked it at the origin.
+	if (code == MessageCode::Reset && !HasGroupFlag)
 	{
 		SpriteSetBall(-1, {0, 0}, 0.0f);
 		Position.X = 0.0;

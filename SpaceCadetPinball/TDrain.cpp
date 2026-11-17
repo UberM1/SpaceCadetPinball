@@ -11,7 +11,9 @@
 TDrain::TDrain(TPinballTable* table, int groupIndex) : TCollisionComponent(table, groupIndex, true)
 {
 	Timer = 0;
-	TimerTime = *loader::query_float_attribute(groupIndex, 0, 407);
+	// 407 is the delay between the last ball draining and the end-of-ball handler.
+	// Absent means no delay.
+	TimerTime = loader::query_float_attribute(groupIndex, 0, 407, 0.0f);
 }
 
 int TDrain::Message(MessageCode code, float value)
@@ -23,8 +25,14 @@ int TDrain::Message(MessageCode code, float value)
 			timer::kill(Timer);
 			Timer = 0;
 		}
+		// Full Tilt, 0x4187d4 call 0x413550, between the timer kill and the flag.
+		FtPlayerFieldsReset();
 		PinballTable->BallInDrainFlag = 0;
 	}
+	// Full Tilt, 0x4187ac: PlayerChanged only swaps the per-player MessageField
+	// (0x4187b3 call 0x413570).
+	if (code == MessageCode::PlayerChanged)
+		FtPlayerFieldsSwap(value);
 	return 0;
 }
 

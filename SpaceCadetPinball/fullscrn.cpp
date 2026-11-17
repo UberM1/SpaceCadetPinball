@@ -4,6 +4,7 @@
 
 #include "options.h"
 #include "pb.h"
+#include "table_rules.h"
 #include "render.h"
 #include "winmain.h"
 
@@ -95,7 +96,7 @@ int fullscrn::GetResolution()
 
 void fullscrn::SetResolution(int value)
 {
-	if (!pb::FullTiltMode || pb::FullTiltDemoMode)
+	if (!CurrentTable->FullTiltData || CurrentTable->DemoData)
 		value = 0;
 	assertm(value >= 0 && value <= 2, "Resolution value out of bounds");
 	resolution = value;
@@ -103,7 +104,7 @@ void fullscrn::SetResolution(int value)
 
 int fullscrn::GetMaxResolution()
 {
-	return pb::FullTiltMode && !pb::FullTiltDemoMode ? 2 : 0;
+	return CurrentTable->FullTiltData && !CurrentTable->DemoData ? 2 : 0;
 }
 
 void fullscrn::window_size_changed()

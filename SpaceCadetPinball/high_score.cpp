@@ -4,6 +4,7 @@
 #include "options.h"
 #include "pb.h"
 #include "score.h"
+#include "table_rules.h"
 #include "translations.h"
 
 bool high_score::dlg_enter_name;
@@ -12,24 +13,39 @@ high_score_entry high_score::DlgData;
 std::vector<high_score_entry> high_score::ScoreQueue;
 high_score_struct high_score::highscore_table[5];
 
+// The high-score keys, namespaced per table. Upstream has one table and keys its five
+// entries and checksum as "0.Name", "0.Score" ... "Verification" with no prefix, so the
+// bonus tables overwrote Space Cadet's scores and each other's. The three Space Cadet
+// entries (PINBALL.DAT, CADET.DAT, DEMO.DAT) keep the bare keys: upstream wrote them
+// for whichever of those DATs it found, so a player's existing scores stay where they
+// are. Every other table gets "<SettingsPrefix>." in front, e.g. "DRAGON.0.Score".
+static std::string high_score_key(const char* key)
+{
+	if (!CurrentTable || !CurrentTable->SettingsPrefix ||
+		CurrentTable->Id == TableId::SpaceCadet3DPB ||
+		CurrentTable->Id == TableId::SpaceCadetFT ||
+		CurrentTable->Id == TableId::SpaceCadetDemo)
+		return key;
+	return std::string(CurrentTable->SettingsPrefix) + "." + key;
+}
+
+static std::string high_score_key(int position, const char* field)
+{
+	return high_score_key((std::to_string(position) + field).c_str());
+}
+
 int high_score::read()
 {
-	char Buffer[20];
-
 	int checkSum = 0;
 	clear_table();
 	for (auto position = 0; position < 5; ++position)
 	{
 		auto& tablePtr = highscore_table[position];
 
-		snprintf(Buffer, sizeof Buffer, "%d", position);
-		strcat(Buffer, ".Name");
-		auto name = options::GetSetting(Buffer, "");
+		auto name = options::GetSetting(high_score_key(position, ".Name"), "");
 		strncpy(tablePtr.Name, name.c_str(), sizeof tablePtr.Name);
 
-		snprintf(Buffer, sizeof Buffer, "%d", position);
-		strcat(Buffer, ".Score");
-		tablePtr.Score = options::get_int(Buffer, tablePtr.Score);
+		tablePtr.Score = options::get_int(high_score_key(position, ".Score").c_str(), tablePtr.Score);
 
 		for (int i = static_cast<int>(strlen(tablePtr.Name)); --i >= 0; checkSum += tablePtr.Name[i])
 		{
@@ -37,7 +53,7 @@ int high_score::read()
 		checkSum += tablePtr.Score;
 	}
 
-	auto verification = options::get_int("Verification", 7);
+	auto verification = options::get_int(high_score_key("Verification").c_str(), 7);
 	if (checkSum != verification)
 		clear_table();
 	return 0;
@@ -45,20 +61,14 @@ int high_score::read()
 
 int high_score::write()
 {
-	char Buffer[20];
-
 	int checkSum = 0;
 	for (auto position = 0; position < 5; ++position)
 	{
 		auto& tablePtr = highscore_table[position];
 
-		snprintf(Buffer, sizeof Buffer, "%d", position);
-		strcat(Buffer, ".Name");
-		options::SetSetting(Buffer, tablePtr.Name);
+		options::SetSetting(high_score_key(position, ".Name"), tablePtr.Name);
 
-		snprintf(Buffer, sizeof Buffer, "%d", position);
-		strcat(Buffer, ".Score");
-		options::set_int(Buffer, tablePtr.Score);
+		options::set_int(high_score_key(position, ".Score").c_str(), tablePtr.Score);
 
 		for (int i = static_cast<int>(strlen(tablePtr.Name)); --i >= 0; checkSum += tablePtr.Name[i])
 		{
@@ -66,7 +76,7 @@ int high_score::write()
 		checkSum += tablePtr.Score;
 	}
 
-	options::set_int("Verification", checkSum);
+	options::set_int(high_score_key("Verification").c_str(), checkSum);
 	return 0;
 }
 

@@ -22,6 +22,10 @@ public:
 	int Message(MessageCode code, float value) override;
 	void Clear(bool lowPriorityOnly = false);
 	void Display(const char* text, float time, bool lowPriority = false);
+	// The glyph-token entry point. Same queue, same timing; the message is simply
+	// marked to draw with score::glyph_fontp. Falls back to the text font when the
+	// table has no "font2" group, which is every Space Cadet table.
+	void DisplayGlyph(const char* text, float time);
 	void DrawImGui();
 
 private:
@@ -34,5 +38,7 @@ private:
 	static void TimerExpired(int timerId, void* caller);
 
 	void Draw();
-	LayoutResult LayoutTextLine(char* textStart) const;
+	void DisplayInternal(const char* text, float time, bool lowPriority, bool glyph);
+	score_msg_font_type* FontFor(const TTextBoxMessage* message) const;
+	LayoutResult LayoutTextLine(char* textStart, const score_msg_font_type* font) const;
 };

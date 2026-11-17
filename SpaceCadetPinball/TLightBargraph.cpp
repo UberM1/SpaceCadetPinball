@@ -13,7 +13,7 @@ TLightBargraph::TLightBargraph(TPinballTable* table, int groupIndex) : TLightGro
 	TLightBargraph::Reset();
 	if (groupIndex > 0)
 	{
-		float* floatArr = loader::query_float_attribute(groupIndex, 0, 904);
+		float* floatArr = loader::query_float_attribute_opt(groupIndex, 0, 904);
 		if (floatArr)
 		{
 			auto count = 2 * List.size();
@@ -69,6 +69,10 @@ int TLightBargraph::Message(MessageCode code, float value)
 		Reset();
 		break;
 	case MessageCode::PlayerChanged:
+		// Full Tilt swaps the per-player MessageField before anything else in this
+		// arm, 0x40bfc2 call 0x413570. Upstream's arm, which follows, never swapped it,
+		// and does not chain to TLightGroup's PlayerChanged arm that would have.
+		FtPlayerFieldsSwap(value);
 		if (TimerBargraph)
 		{
 			timer::kill(TimerBargraph);
@@ -85,6 +89,8 @@ int TLightBargraph::Message(MessageCode code, float value)
 	case MessageCode::Reset:
 		{
 			Reset();
+			// 0x40c04c call [vtable+0x18], then 0x40c051 call 0x413550.
+			FtPlayerFieldsReset();
 			int* playerPtr = PlayerTimerIndexBackup;
 			for (auto index = 0; index < PinballTable->PlayerCount; ++index)
 			{

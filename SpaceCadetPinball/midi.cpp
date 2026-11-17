@@ -3,9 +3,13 @@
 
 
 #include "pb.h"
+#include "table_rules.h"
 
 
 std::vector<Mix_Music*> midi::LoadedTracks{};
+std::vector<Mix_Music*> midi::TableTracks{};
+music_track midi::ActiveTableTrack = no_music;
+bool midi::TableTrackAudible = false;
 Mix_Music* midi::track1, * midi::track2, * midi::track3;
 MidiTracks midi::active_track, midi::NextTrack;
 int midi::Volume = MIX_MAX_VOLUME;
@@ -38,6 +42,9 @@ void midi::music_play()
 		IsPlaying = true;
 		play_track(NextTrack, true);
 		NextTrack = MidiTracks::None;
+		// A bonus table's rules pick tracks by index; resume the one they last asked for.
+		if (ActiveTableTrack != no_music)
+			StartTableTrack();
 	}
 }
 
@@ -53,11 +60,12 @@ void midi::music_stop()
 
 void midi::StopPlayback()
 {
-	if (active_track != MidiTracks::None)
+	if (active_track != MidiTracks::None || TableTrackAudible)
 	{
 		if (MixOpen)
 			Mix_HaltMusic();
 		active_track = MidiTracks::None;
+		TableTrackAudible = false;
 	}
 }
 
@@ -70,23 +78,78 @@ int midi::music_init(bool mixOpen, int volume)
 	IsPlaying = false;
 	track1 = track2 = track3 = nullptr;
 
-	if (pb::FullTiltMode)
+	// One load serving both views of the table's music: load_table_tracks fills the
+	// indexed list the bonus tables' rules select from, and track1..3 are Space
+	// Cadet's three-track window onto the same Mix_Music objects. Nothing is loaded
+	// twice and MidiTracks keeps working unchanged.
+	if (CurrentTable->MusicTrackCount > 0)
 	{
-		track1 = load_track("TABA1");
-		track2 = load_track("TABA2");
-		track3 = load_track("TABA3");
-
-		// FT demo .006 has only one music track, but it is nearly 9 min. long
-		if (!track1 && pb::FullTiltDemoMode)
-			track1 = load_track("DEMO");
+		load_table_tracks(CurrentTable->MusicPrefix, CurrentTable->MusicTrackCount);
+		if (TableTracks.size() > 1)
+			track1 = TableTracks[1];
+		if (TableTracks.size() > 2)
+			track2 = TableTracks[2];
+		if (TableTracks.size() > 3)
+			track3 = TableTracks[3];
 	}
 	else
 	{
 		// 3DPB has only one music track. PINBALL2.MID is a bitmap font, in the same format as PB_MSGFT.bin
-		track1 = load_track("PINBALL");
+		track1 = load_track(CurrentTable->MusicPrefix);
 	}
 
+	// FT demo .006 has only one music track, but it is nearly 9 min. long
+	if (!track1 && CurrentTable->DemoData)
+		track1 = load_track("DEMO");
+
 	return track1 != nullptr;
+}
+
+void midi::load_table_tracks(const char* prefix, int count)
+{
+	TableTracks.assign(1, nullptr); // index 0 is silence, so tracks are 1-based
+	for (int i = 1; i <= count; i++)
+		TableTracks.push_back(load_track(std::string(prefix) + std::to_string(i)));
+	ActiveTableTrack = no_music;
+}
+
+// ActiveTableTrack is the track the rules last asked for, whether or not it is audible:
+// IsPlaying is the Music option and the pause state, and this must neither override it
+// nor forget the request while it is off. music_play resumes it.
+void midi::PlayMusic(music_track track)
+{
+	if (track == ActiveTableTrack && (TableTrackAudible || !IsPlaying))
+		return;
+
+	StopPlayback();
+	ActiveTableTrack = no_music;
+
+	if (track <= 0 || static_cast<size_t>(track) >= TableTracks.size())
+		return;
+
+	ActiveTableTrack = track;
+	if (IsPlaying)
+		StartTableTrack();
+}
+
+void midi::StartTableTrack()
+{
+	// A table may legitimately be missing a track -- the Full Tilt demo ships one --
+	// so a null entry is silence, not an error.
+	auto music = TableTracks[ActiveTableTrack];
+	if (!music || !MixOpen)
+		return;
+
+	if (Mix_PlayMusic(music, -1) == 0)
+	{
+		SetVolume(Volume);
+		TableTrackAudible = true;
+	}
+}
+
+music_track midi::CurrentMusic()
+{
+	return ActiveTableTrack;
 }
 
 void midi::music_shutdown()
@@ -113,7 +176,7 @@ Mix_Music* midi::load_track(std::string fileName)
 	if (!MixOpen || pb::quickFlag)
 		return nullptr;
 
-	if (pb::FullTiltMode)
+	if (CurrentTable->FullTiltData)
 	{
 		// FT sounds are in SOUND subfolder
 		fileName.insert(0, 1, PathSeparator);
@@ -183,6 +246,7 @@ bool midi::play_track(MidiTracks track, bool replay)
 		return false;
 
 	StopPlayback();
+	ActiveTableTrack = no_music;
 
 	if (!IsPlaying)
 	{

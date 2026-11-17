@@ -21,28 +21,36 @@ TFlipper::TFlipper(TPinballTable* table, int groupIndex) : TCollisionComponent(t
 	Elasticity = visual.Elasticity;
 	Smoothness = visual.Smoothness;
 
-	auto collMult = *loader::query_float_attribute(groupIndex, 0, 803);
-	auto retractTime = *loader::query_float_attribute(groupIndex, 0, 805);
-	auto extendTime = *loader::query_float_attribute(groupIndex, 0, 804);
-	auto vecT2 = reinterpret_cast<vector3*>(loader::query_float_attribute(groupIndex, 0, 802));
-	auto vecT1 = reinterpret_cast<vector3*>(loader::query_float_attribute(groupIndex, 0, 801));
-	auto origin = reinterpret_cast<vector3*>(loader::query_float_attribute(groupIndex, 0, 800));
-	auto flipperEdge = new TFlipperEdge(
-		this,
-		&ActiveFlag,
-		visual.CollisionGroup,
-		table,
-		origin,
-		vecT1,
-		vecT2,
-		extendTime,
-		retractTime,
-		collMult,
-		Elasticity,
-		Smoothness);
-	flipperEdge->place_in_grid(&AABB);
-
-	FlipperEdge = flipperEdge;
+	// 803/804/805 are scalars: collision multiplier and the two travel times. Absent
+	// means unspecified, which for a multiplier and a duration is zero -- no boost, no
+	// travel time. 800/801/802 are the flipper's pivot and its two extreme vectors;
+	// without all three there is no flipper geometry, so build no edge at all rather
+	// than place one at the origin. Message() below already tolerates a null edge.
+	auto collMult = loader::query_float_attribute(groupIndex, 0, 803, 0.0f);
+	auto retractTime = loader::query_float_attribute(groupIndex, 0, 805, 0.0f);
+	auto extendTime = loader::query_float_attribute(groupIndex, 0, 804, 0.0f);
+	auto vecT2 = reinterpret_cast<vector3*>(loader::query_float_attribute_opt(groupIndex, 0, 802));
+	auto vecT1 = reinterpret_cast<vector3*>(loader::query_float_attribute_opt(groupIndex, 0, 801));
+	auto origin = reinterpret_cast<vector3*>(loader::query_float_attribute_opt(groupIndex, 0, 800));
+	FlipperEdge = nullptr;
+	if (origin && vecT1 && vecT2)
+	{
+		auto flipperEdge = new TFlipperEdge(
+			this,
+			&ActiveFlag,
+			visual.CollisionGroup,
+			table,
+			origin,
+			vecT1,
+			vecT2,
+			extendTime,
+			retractTime,
+			collMult,
+			Elasticity,
+			Smoothness);
+		flipperEdge->place_in_grid(&AABB);
+		FlipperEdge = flipperEdge;
+	}
 	BmpIndex = 0;
 	if (table)
 		table->FlipperList.push_back(this);
@@ -62,6 +70,10 @@ TFlipper::~TFlipper()
 
 int TFlipper::Message(MessageCode code, float value)
 {
+	// A flipper whose group carried no pivot/extent attributes has no edge to move.
+	if (!FlipperEdge)
+		return 0;
+
 	switch (code)
 	{
 	case MessageCode::TFlipperExtend:
@@ -106,7 +118,8 @@ int TFlipper::Message(MessageCode code, float value)
 
 void TFlipper::port_draw()
 {
-	FlipperEdge->port_draw();
+	if (FlipperEdge)
+		FlipperEdge->port_draw();
 }
 
 void TFlipper::Collision(TBall* ball, vector2* nextPosition, vector2* direction, float distance, TEdgeSegment* edge)
@@ -115,6 +128,9 @@ void TFlipper::Collision(TBall* ball, vector2* nextPosition, vector2* direction,
 
 void TFlipper::UpdateSprite()
 {
+	if (!FlipperEdge || !ListBitmap)
+		return;
+
 	auto bmpCountSub1 = static_cast<int>(ListBitmap->size()) - 1;
 	auto newBmpIndex = static_cast<int>(floor(FlipperEdge->CurrentAngle / FlipperEdge->AngleMax * bmpCountSub1 + 0.5f));
 	newBmpIndex = Clamp(newBmpIndex, 0, bmpCountSub1);
@@ -127,7 +143,7 @@ void TFlipper::UpdateSprite()
 
 int TFlipper::GetFlipperStepAngle(float dt, float* dst) const
 {
-	if (!MessageField)
+	if (!MessageField || !FlipperEdge)
 		return 0;
 
 	auto deltaAngle = FlipperEdge->flipper_angle_delta(dt);

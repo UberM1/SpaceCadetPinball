@@ -23,8 +23,12 @@ TTableLayer::TTableLayer(TPinballTable* table): TCollisionComponent(table, -1, f
 	auto spriteData = visual.Bitmap;
 
 	/*Full tilt: proj center first value is offset by resolution*/
-	auto projCenter = loader::query_float_attribute(groupIndex, 0, 700 + fullscrn::GetResolution());
-	proj::recenter(projCenter[0], projCenter[1]);
+	// 700+resolution is the projection centre for this resolution. Absent means the
+	// table authored none for it -- leave proj at whatever centre it already has
+	// rather than recentre on made-up coordinates.
+	auto projCenter = loader::query_float_attribute_opt(groupIndex, 0, 700 + fullscrn::GetResolution());
+	if (projCenter)
+		proj::recenter(projCenter[0], projCenter[1]);
 	render::set_background_zmap(spriteData.ZMap, 0, 0);
 
 	auto bmp = spriteData.Bmp;
@@ -59,8 +63,11 @@ TTableLayer::TTableLayer(TPinballTable* table): TCollisionComponent(table, -1, f
 	/*Full tilt hack - GraityMult should be 0.2*/
 	if (!pb::FullTiltMode && !pb::FullTiltDemoMode)
 	{
+		// 701 only reached in 3DPB mode, where the table always has it; guarded so a
+		// malformed table reports the miss instead of faulting. 0.2f is not invented
+		// here -- it is the value the Full Tilt branch below already uses.
 		auto angleMultArr = loader::query_float_attribute(groupIndex, 0, 701);
-		GraityMult = *angleMultArr;
+		GraityMult = angleMultArr ? *angleMultArr : 0.2f;
 	}
 	else
 		GraityMult = 0.2f;

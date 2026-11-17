@@ -30,6 +30,17 @@ public:
 	static void NotifyTimerExpired(int timerId, void* caller);
 
 	std::vector<TLight*> List;
+
+	// Indexed access to the group's members. The bonus tables walk a group one light
+	// at a time -- Dragon's Keep's prison-window sweep overrides a single light on or
+	// off as a cursor passes over it -- which the group-wide operations cannot express.
+	// Returns nullptr out of range rather than asserting, because the cursor wraps.
+	TLight* LightAt(int index) const
+	{
+		if (index < 0 || static_cast<size_t>(index) >= List.size())
+			return nullptr;
+		return List[index];
+	}
 	float Timer1Time{};
 	float Timer1TimeDefault;
 	MessageCode MessageField2{};

@@ -29,6 +29,13 @@ struct visualKickerStruct
 	vector3 ThrowBallDirection;
 	float ThrowBallAngleMult;
 	int HardHitSoundId;
+
+	// Attribute 410, Full Tilt only: eight floats that read as a throw path, two
+	// points of four. 18 kickers in DRAGON.DAT and 14 in PIRATES.DAT carry it.
+	// Parsed and stored so the attribute walk completes; nothing consumes it yet,
+	// and leaving it unparsed is what made TKickout dereference a null FloatArr.
+	bool HasThrowPath;
+	float ThrowPath[8];
 };
 
 struct SpriteData
@@ -103,7 +110,15 @@ public:
 	static char* query_name(int groupIndex);
 	static float* query_float_attribute(int groupIndex, int groupIndexOffset, int firstValue);
 	static float query_float_attribute(int groupIndex, int groupIndexOffset, int firstValue, float defVal);
+	/* Same lookup, but a miss is not an error. Space Cadet's data always carries every
+	   attribute its component classes read, so the erroring form is right there. Full
+	   Tilt's bonus tables legitimately omit attributes -- a blocker with no wall, a ramp
+	   with no ramp wall, an accelerator with no z -- and raising a modal error dialog
+	   per omission makes those tables unloadable. Callers of these forms must handle
+	   null by skipping the feature. */
+	static float* query_float_attribute_opt(int groupIndex, int groupIndexOffset, int firstValue);
 	static int16_t* query_iattribute(int groupIndex, int firstValue, int* arraySize);
+	static int16_t* query_iattribute_opt(int groupIndex, int firstValue, int* arraySize);
 	static float play_sound(int soundIndex, TPinballComponent *soundSource, const char* info);
 	static DatFile* loader_table;
 private:
@@ -111,5 +126,7 @@ private:
 	static DatFile* sound_record_table;
 	static int sound_count;
 	static int loader_sound_count;
-	static soundListStruct sound_list[65];
+	// 65 covers Space Cadet's 48 groups. Dragon's Keep has 51 and Skulduggery 67,
+	// so the bound is per-table in practice; 129 covers every shipped table.
+	static soundListStruct sound_list[129];
 };

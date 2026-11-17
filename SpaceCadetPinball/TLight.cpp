@@ -15,12 +15,11 @@ TLight::TLight(TPinballTable* table, int groupIndex) : TPinballComponent(table, 
 	UndoOverrideTimer = 0;
 	FlashTimer = 0;
 	Reset();
-	float* floatArr1 = loader::query_float_attribute(groupIndex, 0, 900);
-	FlashDelay[0] = *floatArr1;
-	SourceDelay[0] = *floatArr1;
-	float* floatArr2 = loader::query_float_attribute(groupIndex, 0, 901);
-	FlashDelay[1] = *floatArr2;
-	SourceDelay[1] = *floatArr2;
+	// 900/901 are the flasher's off/on half-periods. A light that is never flashed does
+	// not need them, and many of Dragon's and Skulduggery's lamps omit them. Absent
+	// means no delay: the flasher, if ever started, toggles on consecutive ticks.
+	FlashDelay[0] = SourceDelay[0] = loader::query_float_attribute(groupIndex, 0, 900, 0.0f);
+	FlashDelay[1] = SourceDelay[1] = loader::query_float_attribute(groupIndex, 0, 901, 0.0f);
 }
 
 int TLight::Message(MessageCode code, float value)
@@ -142,6 +141,9 @@ int TLight::Message(MessageCode code, float value)
 		schedule_timeout(value);
 		break;
 	case MessageCode::TLightSetOnStateBmpIndex:
+		// Lights on the bonus tables can be pure logic with no sprite list at all.
+		if (!ListBitmap)
+			break;
 		LightOnBmpIndex = Clamp(static_cast<int>(floor(value)), 0, static_cast<int>(ListBitmap->size()) - 1);
 		BmpArr[0] = -1;
 		BmpArr[1] = LightOnBmpIndex;
@@ -162,6 +164,8 @@ int TLight::Message(MessageCode code, float value)
 		break;
 	case MessageCode::TLightIncOnStateBmpIndex:
 		bmpIndex = LightOnBmpIndex + 1;
+		if (!ListBitmap)
+			break;
 		if (bmpIndex >= static_cast<int>(ListBitmap->size()))
 			bmpIndex = static_cast<int>(ListBitmap->size()) - 1;
 		Message(MessageCode::TLightSetOnStateBmpIndex, static_cast<float>(bmpIndex));

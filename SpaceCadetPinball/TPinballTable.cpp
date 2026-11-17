@@ -6,6 +6,7 @@
 #include "loader.h"
 #include "midi.h"
 #include "pb.h"
+#include "table_rules.h"
 #include "render.h"
 #include "TBall.h"
 #include "TBlocker.h"
@@ -34,10 +35,16 @@
 #include "TTimer.h"
 #include "TTripwire.h"
 #include "TWall.h"
+#include "TDiverter.h"
+#include "TLightSweep.h"
+#include "TMagnet.h"
+#include "TRampExit.h"
+#include "TAccelerator.h"
 #include "TPlunger.h"
 #include "TFlipper.h"
 #include "TDrain.h"
 #include "translations.h"
+#include "FtAccelDebug.h" // FTDBG
 
 int TPinballTable::score_multipliers[5] = {1, 2, 3, 5, 10};
 
@@ -45,6 +52,8 @@ int TPinballTable::score_multipliers[5] = {1, 2, 3, 5, 10};
 TPinballTable::TPinballTable(): TPinballComponent(nullptr, -1, false)
 {
 	int shortArrLength;
+
+	ft_debug_clear_registries(); // FTDBG
 
 	CurScoreStruct = nullptr;
 	ScoreBallcount = nullptr;
@@ -62,7 +71,7 @@ TPinballTable::TPinballTable(): TPinballComponent(nullptr, -1, false)
 	auto ball = AddBall({0.0f, 0.0f});
 	ball->Disable();
 
-	new TTableLayer(this);
+	TableLayer = new TTableLayer(this);
 	LightGroup = new TLightGroup(this, 0);
 
 	auto score1 = score::create("score1", render::background_bitmap);
@@ -95,7 +104,7 @@ TPinballTable::TPinballTable(): TPinballComponent(nullptr, -1, false)
 				new TWall(this, groupIndex);
 				break;
 			case 1001:
-				Plunger = new TPlunger(this, groupIndex);
+				Plunger = new TPlunger(this, groupIndex, false);
 				break;
 			case 1002:
 				LightGroup->List.push_back(new TLight(this, groupIndex));
@@ -178,15 +187,85 @@ TPinballTable::TPinballTable(): TPinballComponent(nullptr, -1, false)
 			case 1033:
 				new TTextBox(this, groupIndex);
 				break;
+
+			// Full Tilt's bonus tables use seven object types 3D Pinball never had.
+			// The classes are in no decompilation, but they ARE in CADET.EXE: its own
+			// TPinballTable constructor at 0x41a290 spawns all seven, which is why the
+			// assertion string "sweep == NULL" is in the Space Cadet binary even though
+			// Space Cadet's data never defines one. All seven were read out of there and
+			// none is a stand-in any more. Every component also carries its real type
+			// code via GetComponentType(), which is how the rules discriminate the two
+			// that share a class with an existing type.
+			case 1034:
+				// s_launcher1: Skulduggery's ball launcher; that table has no plunger.
+				// RECOVERED. CADET.EXE's own TPinballTable constructor (0x41a290) spawns
+				// both 1001 and 1034 from TPlunger's constructor at 0x418800, passing a
+				// third argument of 0 for 1001 and 1 for 1034, and storing both into the
+				// same table field (+0x10a, i.e. Plunger). The flag lands in TPlunger
+				// +0x96; see TPlunger.h for what reads it.
+				Plunger = new TPlunger(this, groupIndex, true);
+				break;
+			case 1035:
+				// s_rexit*: ramp exits, one ramp wall (1301) each.
+				new TRampExit(this, groupIndex);
+				break;
+			case 1036:
+				// a_accl*: accelerators, a wall plus a kicker.
+				new TAccelerator(this, groupIndex);
+				break;
+			case 1037:
+				// A point (408) on a collision layer (602): an extra ball the table
+				// data places itself. CADET.EXE constructs TBall here -- the same
+				// constructor AddBall calls, at the same 0x22b object size -- and
+				// pushes it onto the same BallList, so this is recovered, not a
+				// stand-in.
+				BallList.push_back(new TBall(this, groupIndex));
+				break;
+			case 1038:
+				// light_sweeps: light-show settings (1600-1604), no physics.
+				LightSweep = new TLightSweep(this, LightGroup, groupIndex);
+				break;
+			case 1042:
+				// s_magnet*: a circle (600) and a field strength (305).
+				new TMagnet(this, groupIndex);
+				break;
+			case 1043:
+				// a_dvtr*: diverters.
+				new TDiverter(this, groupIndex);
+				break;
+
 			default:
 				continue;
 			}
+
+			// Every branch above ends in exactly one construction, and the
+			// TPinballComponent constructor appends to ComponentList, so the object
+			// just spawned is the last entry. Stamping the type here keeps the
+			// knowledge in the one place that already has it.
+			if (!ComponentList.empty())
+				ComponentList.back()->ComponentType = objectType;
 		}
 	}
 
 	render::build_occlude_list();
 	pb::InfoTextBox = dynamic_cast<TTextBox*>(find_component("info_text_box"));
-	pb::MissTextBox = dynamic_cast<TTextBox*>(find_component("mission_text_box"));
+	pb::MissTextBox = dynamic_cast<TTextBox*>(find_component_opt("mission_text_box"));
+	if (CurrentTable && CurrentTable->UnstuckBoundsExtra)
+	{
+		// A comma-separated list of group names.
+		std::string names = CurrentTable->UnstuckBoundsExtra;
+		for (size_t start = 0; start <= names.size();)
+		{
+			auto end = names.find(',', start);
+			if (end == std::string::npos)
+				end = names.size();
+			auto bounds = dynamic_cast<TCollisionComponent*>(
+				find_component_opt(names.substr(start, end - start).c_str()));
+			if (bounds)
+				UnstuckBounds.push_back(bounds);
+			start = end + 1;
+		}
+	}
 	control::make_links(this);
 }
 
@@ -208,6 +287,10 @@ TPinballTable::~TPinballTable()
 		ScoreBallcount = nullptr;
 	}
 	delete LightGroup;
+	// Both live in ComponentList and are destroyed by the loop below; drop the
+	// aliases first so nothing reaches a half-torn-down table through them.
+	LightSweep = nullptr;
+	TableLayer = nullptr;
 	while (!ComponentList.empty())
 	{
 		// Component destructor removes it from the list.
@@ -229,6 +312,20 @@ TPinballComponent* TPinballTable::find_component(LPCSTR componentName)
 	}
 
 	pb::ShowMessageBox(SDL_MESSAGEBOX_WARNING, "Table cant find:", componentName);
+	return nullptr;
+}
+
+// Same lookup without the dialog, for components a table may legitimately lack.
+//
+// find_component raises a modal warning on a miss, which is right for Space Cadet --
+// every name it asks for is in its data, so a miss is a corrupt table. Dragon's Keep
+// and Skulduggery genuinely have no "mission_text_box" group, and a modal at startup
+// blocks the process until someone dismisses it.
+TPinballComponent* TPinballTable::find_component_opt(LPCSTR componentName)
+{
+	for (auto component : ComponentList)
+		if (component->GroupName && !strcmp(component->GroupName, componentName))
+			return component;
 	return nullptr;
 }
 
@@ -261,7 +358,15 @@ int TPinballTable::AddScore(int score)
 		if (BonusScore > 5000000)
 			BonusScore = 5000000;
 	}
-	int addedScore = ScoreAdded + score * score_multipliers[ScoreMultiplier];
+	// ScoreMultiplier is an index into score_multipliers[] for 3D Pinball and Space
+	// Cadet and the multiplier value itself for the Full Tilt bonus tables, whose
+	// awards write 2..5 into it; see TableRules::MultiplierIsValue. The clamp is on
+	// the index path only, and only because an out-of-range index would read past
+	// the array -- it changes nothing for a table that stays in 0..4.
+	const int multiplier = CurrentTable->MultiplierIsValue
+		                       ? std::max(ScoreMultiplier, 1)
+		                       : score_multipliers[std::min(std::max(ScoreMultiplier, 0), 4)];
+	int addedScore = ScoreAdded + score * multiplier;
 	CurScore += addedScore;
 	if (CurScore > 1000000000)
 	{
@@ -290,9 +395,12 @@ void TPinballTable::tilt(float time)
 {
 	if (!TiltLockFlag && !BallInDrainFlag)
 	{
-		pb::InfoTextBox->Clear();
-		pb::MissTextBox->Clear();
-		pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING136), -1.0);
+		if (pb::InfoTextBox)
+			pb::InfoTextBox->Clear();
+		if (pb::MissTextBox)
+			pb::MissTextBox->Clear();
+		if (pb::InfoTextBox)
+			pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING136), -1.0);
 		loader::play_sound(SoundIndex3, nullptr, "TPinballTable1");
 		TiltTimeoutTimer = timer::set(30.0, this, tilt_timeout);
 
@@ -315,6 +423,20 @@ void TPinballTable::port_draw()
 	}
 }
 
+// Space Cadet has exactly one flipper a side, so the original kept one pointer each
+// and every construction overwrote it. Full Tilt's bonus tables do not: Dragon's Keep
+// has one left and two right, Skulduggery two of each. With single pointers only the
+// last-spawned flipper of a side responds, which is why the lower pair sat still.
+//
+// FlipperList already holds every flipper; the type code says which side, 1003 left
+// and 1004 right, the same codes the spawn switch above dispatches on.
+void TPinballTable::MessageFlippers(int typeCode, MessageCode code, float value)
+{
+	for (auto flipper : FlipperList)
+		if (flipper->GetComponentType() == typeCode)
+			flipper->Message(code, value);
+}
+
 int TPinballTable::Message(MessageCode code, float value)
 {
 	const char* rc_text;
@@ -324,25 +446,25 @@ int TPinballTable::Message(MessageCode code, float value)
 	case MessageCode::LeftFlipperInputPressed:
 		if (!TiltLockFlag)
 		{
-			FlipperL->Message(MessageCode::TFlipperExtend, value);
+			MessageFlippers(1003, MessageCode::TFlipperExtend, value);
 		}
 		break;
 	case MessageCode::LeftFlipperInputReleased:
 		if (!TiltLockFlag)
 		{
-			FlipperL->Message(MessageCode::TFlipperRetract, value);
+			MessageFlippers(1003, MessageCode::TFlipperRetract, value);
 		}
 		break;
 	case MessageCode::RightFlipperInputPressed:
 		if (!TiltLockFlag)
 		{
-			FlipperR->Message(MessageCode::TFlipperExtend, value);
+			MessageFlippers(1004, MessageCode::TFlipperExtend, value);
 		}
 		break;
 	case MessageCode::RightFlipperInputReleased:
 		if (!TiltLockFlag)
 		{
-			FlipperR->Message(MessageCode::TFlipperRetract, value);
+			MessageFlippers(1004, MessageCode::TFlipperRetract, value);
 		}
 		break;
 	case MessageCode::PlungerInputPressed:
@@ -375,7 +497,8 @@ int TPinballTable::Message(MessageCode code, float value)
 			rc_text = pb::get_rc_string(Msg::STRING131);
 		else
 			rc_text = pb::get_rc_string(Msg::STRING127);
-		pb::InfoTextBox->Display(rc_text, -1.0);
+		if (pb::InfoTextBox)
+			pb::InfoTextBox->Display(rc_text, -1.0);
 		if (Demo)
 			Demo->Message(MessageCode::NewGame, 0.0);
 		break;
@@ -447,8 +570,10 @@ int TPinballTable::Message(MessageCode code, float value)
 			JackpotScoreFlag = false;
 			BonusScoreFlag = false;
 			UnknownP71 = 0;
-			pb::InfoTextBox->Clear();
-			pb::MissTextBox->Clear();
+			if (pb::InfoTextBox)
+				pb::InfoTextBox->Clear();
+			if (pb::MissTextBox)
+				pb::MissTextBox->Clear();
 			LightGroup->Message(MessageCode::TLightGroupLightShowAnimation, 0.2f);
 			auto time = loader::play_sound(SoundIndex1, nullptr, "TPinballTable2");
 			if (time < 0)
@@ -462,7 +587,11 @@ int TPinballTable::Message(MessageCode code, float value)
 			MultiballFlag = true;
 			JackpotScore = 500000;
 		}
-		midi::play_track(MidiTracks::Track1, true);
+		// A table with its own table-level handler starts its own music there: the
+		// new-game arm of DRAGON.EXE's 0x424260 plays its idle track, which is TABC7
+		// and not the first of the set.
+		if (!CurrentTable->TableControl)
+			midi::play_track(MidiTracks::Track1, true);
 		break;
 	case MessageCode::PlungerRelaunchBall:
 		if (ReplayTimer)
@@ -479,7 +608,8 @@ int TPinballTable::Message(MessageCode code, float value)
 					textboxText = pb::get_rc_string(Msg::STRING131);
 				else
 					textboxText = pb::get_rc_string(Msg::STRING127);
-				pb::InfoTextBox->Display(textboxText, -1.0);
+				if (pb::InfoTextBox)
+					pb::InfoTextBox->Display(textboxText, -1.0);
 				break;
 			}
 
@@ -547,7 +677,8 @@ int TPinballTable::Message(MessageCode code, float value)
 			}
 
 			if (textboxText != nullptr)
-				pb::InfoTextBox->Display(textboxText, -1);
+				if (pb::InfoTextBox)
+					pb::InfoTextBox->Display(textboxText, -1);
 			JackpotScoreFlag = false;
 			BonusScoreFlag = false;
 			UnknownP71 = 0;
@@ -556,8 +687,10 @@ int TPinballTable::Message(MessageCode code, float value)
 		break;
 	case MessageCode::GameOver:
 		loader::play_sound(SoundIndex2, nullptr, "TPinballTable3");
-		pb::MissTextBox->Clear();
-		pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING135), -1.0);
+		if (pb::MissTextBox)
+			pb::MissTextBox->Clear();
+		if (pb::InfoTextBox)
+			pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING135), -1.0);
 		EndGameTimeoutTimer = timer::set(3.0, this, EndGame_timeout);
 		break;
 	case MessageCode::Reset:
@@ -658,6 +791,24 @@ int TPinballTable::BallCountInRect(const RectF& rect)
 	return count;
 }
 
+int TPinballTable::BallCountInRect(const RectF& rect, int collisionMask)
+{
+	int count = 0;
+	for (const auto ball : BallList)
+	{
+		if (ball->ActiveFlag &&
+			ball->CollisionMask == collisionMask &&
+			ball->Position.X >= rect.XMin &&
+			ball->Position.Y >= rect.YMin &&
+			ball->Position.X <= rect.XMax &&
+			ball->Position.Y <= rect.YMax)
+		{
+			count++;
+		}
+	}
+	return count;
+}
+
 int TPinballTable::BallCountInRect(const vector2& pos, float margin)
 {
 	RectF rect{};
@@ -680,8 +831,13 @@ void TPinballTable::EndGame_timeout(int timerId, void* caller)
 	}
 	if (table->Demo)
 		table->Demo->Message(MessageCode::GameOver, 0.0);
-	control::handler(MessageCode::ControlMissionStarted, pb::MissTextBox);
-	pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING125), -1.0);
+	// Neither Full Tilt bonus table has a "mission_text_box" group, so MissTextBox is
+	// null there. control::handler dereferences the component it is given to find its
+	// control record; with no mission text box there is no mission display to notify.
+	if (pb::MissTextBox)
+		control::handler(MessageCode::ControlMissionStarted, pb::MissTextBox);
+	if (pb::InfoTextBox)
+		pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING125), -1.0);
 }
 
 void TPinballTable::LightShow_timeout(int timerId, void* caller)

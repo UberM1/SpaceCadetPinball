@@ -58,7 +58,14 @@ void zdrv::paint(int width, int height, gdrv_bitmap8* dstBmp, int dstBmpXOff, in
 	{
 		for (int x = width; x > 0; --x)
 		{
-			if (*dstPtrZ >= *srcPtrZ)
+			// 0xFFFF is the "no pixel here" marker, not a depth: it is what fill()
+			// clears the z-buffer with and what SplitSplicedBitmap leaves in the gaps
+			// of a spliced sprite, whose colour there is the unwritten 0xff. Where the
+			// playfield's own zMap has been painted the >= test already hides those
+			// gaps, but the bonus tables are narrower than the virtual screen and
+			// Dragon's Keep's bow overhangs the table art, so its gaps landed on
+			// never-painted 0xFFFF and drew as a white block.
+			if (*srcPtrZ != 0xFFFF && *dstPtrZ >= *srcPtrZ)
 			{
 				*dstPtr = *srcPtr;
 				*dstPtrZ = *srcPtrZ;

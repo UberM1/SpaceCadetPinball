@@ -7,9 +7,12 @@ class TBall;
 struct scoreStruct;
 class TFlipper;
 class TPlunger;
+class TCollisionComponent;
 class TDrain;
 class TDemo;
 class TLightGroup;
+class TLightSweep;
+class TTableLayer;
 
 struct score_struct_super
 {
@@ -29,6 +32,7 @@ public:
 	TPinballTable();
 	~TPinballTable() override;
 	TPinballComponent* find_component(LPCSTR componentName);
+	TPinballComponent* find_component_opt(LPCSTR componentName);
 	TPinballComponent* find_component(int groupIndex);
 	int AddScore(int score);
 	void ChangeBallCount(int count);
@@ -38,12 +42,21 @@ public:
 	TBall* AddBall(vector2 position);
 	int BallCountInRect(const RectF& rect);
 	int BallCountInRect(const vector2& pos, float margin);
+	// Counting only the balls on one collision layer. THole's release gate needs it:
+	// the original's 0x4130c0 filters on CollisionMask as well as ActiveFlag, which is
+	// what lets the hole ignore the ball it is itself about to release -- that ball
+	// still carries the hole's capture mask until the release assigns the new one.
+	int BallCountInRect(const RectF& rect, int collisionMask);
 
 	static void EndGame_timeout(int timerId, void* caller);
 	static void LightShow_timeout(int timerId, void* caller);
 	static void replay_timer_callback(int timerId, void* caller);
 	static void tilt_timeout(int timerId, void* caller);
 
+	void MessageFlippers(int typeCode, MessageCode code, float value);
+
+	// Kept for the code that reaches for "the" flipper; input goes through
+	// MessageFlippers so every flipper on a side responds.
 	TFlipper* FlipperL;
 	TFlipper* FlipperR;
 	scoreStruct* CurScoreStruct;
@@ -63,6 +76,10 @@ public:
 	int PlayerCount;
 	int CurrentPlayer;
 	TPlunger* Plunger;
+	// Resolved once here from TableRules::UnstuckBoundsExtra, because
+	// control::UnstuckBall runs for every ball on every frame and must not do a linear
+	// scan of ComponentList to find them. Empty on Space Cadet.
+	std::vector<TCollisionComponent*> UnstuckBounds;
 	TDrain* Drain;
 	TDemo* Demo{};
 	int XOffset{};
@@ -73,6 +90,14 @@ public:
 	std::vector<TBall*> BallList;
 	std::vector<TFlipper*> FlipperList;
 	TLightGroup* LightGroup;
+
+	// The playfield layer, kept because the light sweep needs its extent to lay out
+	// its grid. The originals hold it on the table for the same reason.
+	TTableLayer* TableLayer{};
+
+	// Full Tilt's `light_sweeps` (object type 1038). At most one per table -- the
+	// originals assert on a second -- and null on every Space Cadet table.
+	TLightSweep* LightSweep{};
 	float GravityDirVectMult{};
 	float GravityAngleX{};
 	float GravityAnglY{};
@@ -85,6 +110,12 @@ public:
 	bool BonusScoreFlag{};
 	int JackpotScore{};
 	bool JackpotScoreFlag{};
+
+	// Full Tilt's second, larger jackpot, at +0x17a in the originals where
+	// JackpotScore is +0x172. Dragon's Keep's moat chute pays into it and its
+	// mouth sink pays it out; Space Cadet has no equivalent and leaves it zero.
+	int SuperJackpotScore{};
+	bool SuperJackpotScoreFlag{};
 	int UnknownP71{};
 	int BallCount{};
 	int MaxBallCount;

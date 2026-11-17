@@ -13,7 +13,7 @@ TComponentGroup::TComponentGroup(TPinballTable* table, int groupIndex) : TPinbal
 	if (groupIndex > 0)
 	{
 		int attrCount;
-		auto shortArr = loader::query_iattribute(groupIndex, 1027, &attrCount);
+		auto shortArr = loader::query_iattribute_opt(groupIndex, 1027, &attrCount);
 		auto shortArrPtr = shortArr;
 		for (auto index = 0; index < attrCount; ++index, ++shortArrPtr)
 		{
@@ -44,6 +44,12 @@ int TComponentGroup::Message(MessageCode code, float value)
 		}
 		if (value > 0.0f)
 			this->Timer = timer::set(value, this, NotifyTimerExpired);
+	}
+	else if (code == MessageCode::PlayerChanged)
+	{
+		// 0x413794 cmp edi,0x3fe / je 0x413831: the group swaps its own per-player
+		// MessageField (0x413838 call 0x413570) and does not forward the message.
+		FtPlayerFieldsSwap(value);
 	}
 	else if (code < MessageCode::Pause || (code > MessageCode::SetTiltLock &&
 		code != MessageCode::PlayerChanged && code != MessageCode::GameOver))

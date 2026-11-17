@@ -43,7 +43,7 @@ int loader::sound_count = 1;
 int loader::loader_sound_count;
 DatFile* loader::loader_table;
 DatFile* loader::sound_record_table;
-soundListStruct loader::sound_list[65];
+soundListStruct loader::sound_list[129];
 
 int loader::error(int errorCode, int captionCode)
 {
@@ -90,7 +90,10 @@ void loader::loadfrom(DatFile* datFile)
 		auto value = reinterpret_cast<int16_t*>(datFile->field(groupIndex, FieldTypes::ShortValue));
 		if (value && *value == 202)
 		{
-			if (sound_count < 65)
+			// The array holds 129; the old cap of 65 was sized for Space Cadet's 64
+			// sound groups and silently dropped PIRATES.DAT's last three, which then
+			// failed every get_sound_id that referenced them.
+			if (sound_count < static_cast<int>(sizeof sound_list / sizeof sound_list[0]))
 			{
 				sound_list[sound_count] = {nullptr, groupIndex, 0, 0};
 				sound_count++;
@@ -188,6 +191,8 @@ int loader::query_handle(LPCSTR lpString)
 	return loader_table->record_labeled(lpString);
 }
 
+static bool query_report_missing = true;
+
 short loader::query_visual_states(int groupIndex)
 {
 	short result;
@@ -216,7 +221,8 @@ int16_t* loader::query_iattribute(int groupIndex, int firstValue, int* arraySize
 {
 	if (groupIndex < 0)
 	{
-		error(0, 22);
+		if (query_report_missing)
+			error(0, 22);
 		return nullptr;
 	}
 
@@ -233,23 +239,34 @@ int16_t* loader::query_iattribute(int groupIndex, int firstValue, int* arraySize
 		}
 	}
 
-	error(2, 23);
+	if (query_report_missing)
+		error(2, 23);
 	*arraySize = 0;
 	return nullptr;
+}
+
+int16_t* loader::query_iattribute_opt(int groupIndex, int firstValue, int* arraySize)
+{
+	query_report_missing = false;
+	auto result = query_iattribute(groupIndex, firstValue, arraySize);
+	query_report_missing = true;
+	return result;
 }
 
 float* loader::query_float_attribute(int groupIndex, int groupIndexOffset, int firstValue)
 {
 	if (groupIndex < 0)
 	{
-		error(0, 22);
+		if (query_report_missing)
+			error(0, 22);
 		return nullptr;
 	}
 
 	int stateId = state_id(groupIndex, groupIndexOffset);
 	if (stateId < 0)
 	{
-		error(16, 22);
+		if (query_report_missing)
+			error(16, 22);
 		return nullptr;
 	}
 
@@ -263,8 +280,17 @@ float* loader::query_float_attribute(int groupIndex, int groupIndexOffset, int f
 			return floatArr + 1;
 	}
 
-	error(13, 22);
+	if (query_report_missing)
+		error(13, 22);
 	return nullptr;
+}
+
+float* loader::query_float_attribute_opt(int groupIndex, int groupIndexOffset, int firstValue)
+{
+	query_report_missing = false;
+	auto result = query_float_attribute(groupIndex, groupIndexOffset, firstValue);
+	query_report_missing = true;
+	return result;
 }
 
 float loader::query_float_attribute(int groupIndex, int groupIndexOffset, int firstValue, float defVal)
@@ -332,35 +358,104 @@ int loader::material(int groupIndex, visualStruct* visual)
 	return 0;
 }
 
+// ---- FTDBG: play_sound rate harness (remove before finishing) ----
+//
+// A deafening table is the same clip started many times a second: SDL_mixer mixes every
+// voice, so a sound retriggered each frame stacks. FT_SOUNDDBG=1 counts starts per sound
+// id in a 1000 ms window of pb::time_ticks and prints once per window as soon as a id
+// crosses FT_SOUNDRATE (default 12 starts/s), which no legitimate effect reaches.
+static void ft_sound_rate_note(int soundIndex, const char* info)
+{
+	static int enabled = -1;
+	if (enabled < 0)
+		enabled = getenv("FT_SOUNDDBG") ? 1 : 0;
+	if (!enabled)
+		return;
+
+	static int threshold = 0;
+	if (!threshold)
+	{
+		auto e = getenv("FT_SOUNDRATE");
+		threshold = e ? atoi(e) : 8;
+		if (threshold < 2)
+			threshold = 2;
+	}
+
+	struct Entry
+	{
+		int Id;
+		int WindowStart;
+		int WindowCount;
+		int Total;
+		bool Reported;
+		const char* Info;
+	};
+	static std::vector<Entry> entries;
+
+	Entry* en = nullptr;
+	for (auto& e : entries)
+		if (e.Id == soundIndex)
+			en = &e;
+	if (!en)
+	{
+		entries.push_back(Entry{soundIndex, pb::time_ticks, 0, 0, false, info});
+		en = &entries.back();
+	}
+
+	en->Total++;
+	en->Info = info;
+	if (pb::time_ticks - en->WindowStart >= 1000)
+	{
+		if (en->WindowCount >= threshold)
+			fprintf(stderr, "DBG-snd   LOOP sound=%-3d %-24s %d starts in the last 1000 ms"
+			        " (total %d)\n", en->Id, en->Info ? en->Info : "?", en->WindowCount, en->Total);
+		en->WindowStart = pb::time_ticks;
+		en->WindowCount = 0;
+		en->Reported = false;
+	}
+	en->WindowCount++;
+	if (!en->Reported && en->WindowCount >= threshold)
+	{
+		en->Reported = true;
+		fprintf(stderr, "DBG-snd   LOOP sound=%-3d %-24s crossed %d starts/s (total %d)\n",
+		        en->Id, en->Info ? en->Info : "?", threshold, en->Total);
+	}
+}
+// ---- end FTDBG ----
+
 float loader::play_sound(int soundIndex, TPinballComponent *soundSource, const char *info)
 {
 	if (soundIndex <= 0)
 		return 0.0;
+	ft_sound_rate_note(soundIndex, info);
 	Sound::PlaySound(sound_list[soundIndex].WavePtr, pb::time_ticks, soundSource, info);
 	return sound_list[soundIndex].Duration;
 }
 
 int loader::state_id(int groupIndex, int groupIndexOffset)
 {
+	// quiet() is set while an _opt lookup is in flight: a group that has no state
+	// record at all is just another legitimate omission there.
+	auto fail = [](int code) { return query_report_missing ? error(code, 24) : -1; };
 	auto visualState = query_visual_states(groupIndex);
 	if (visualState <= 0)
-		return error(12, 24);
+		return fail(12);
 	auto shortArr = reinterpret_cast<int16_t*>(loader_table->field(groupIndex, FieldTypes::ShortValue));
 	if (!shortArr)
-		return error(1, 24);
+		return fail(1);
 	if (*shortArr != 200)
-		return error(5, 24);
+		return fail(5);
 	if (groupIndexOffset > visualState)
-		return error(12, 24);
+		return fail(12);
 	if (!groupIndexOffset)
 		return groupIndex;
 
 	groupIndex += groupIndexOffset;
 	shortArr = reinterpret_cast<int16_t*>(loader_table->field(groupIndex, FieldTypes::ShortValue));
 	if (!shortArr)
-		return error(1, 24);
+		return fail(1);
 	if (*shortArr != 201)
-		return error(6, 24);
+		return fail(6);
 	return groupIndex;
 }
 
@@ -396,6 +491,14 @@ int loader::kicker(int groupIndex, visualKickerStruct* kicker)
 			break;
 		case 404:
 			kicker->ThrowBallDirection = *reinterpret_cast<vector3*>(floatArr);
+			// Full Tilt normalises this one too: the 404 arm (jump table 0x40d4a0 slot 404
+			// -> DRAGON.EXE 0x40d39b) copies X/Y/Z into +0xc..+0x14 and jumps to 0x40d471
+			// call 0x40cb40, the 2D normalise the 410 arm ends with. CADET.DAT has
+			// non-unit 404 vectors (|v| = 1.414 on several kickers), so without this those
+			// threw about 41% too hard. 3D Pinball's loader does not normalise, so
+			// PINBALL.DAT keeps the raw vector.
+			if (pb::FullTiltMode)
+				maths::normalize_2d(*reinterpret_cast<vector2*>(&kicker->ThrowBallDirection));
 			floatArr += 3;
 			index += 4;
 			break;
@@ -405,10 +508,34 @@ int loader::kicker(int groupIndex, visualKickerStruct* kicker)
 		case 406:
 			kicker->HardHitSoundId = get_sound_id(static_cast<int>(floor(*floatArr)));
 			break;
+		case 410:
+			// Full Tilt only: two points of four floats each, the fourth of each unused.
+			// The original (DRAGON.EXE 0x40d3fc) does not keep the path -- it stores the
+			// second point minus the first as the throw direction and normalises it, the
+			// same ending its 404 case has. That is where type-1036 accelerators get
+			// their push from: they carry 410 and no 404, so without this the direction
+			// is the zero vector and throw_ball leaves the ball standing still.
+			//
+			// The normalise is 2D in the original, over X and Y only, with Z carried
+			// through unscaled; it is the same maths::normalize_2d the rest of the engine
+			// uses on these vectors. The 404 case above shares that ending on Full Tilt
+			// data only.
+			for (auto i = 0; i < 8; i++)
+				kicker->ThrowPath[i] = floatArr[i];
+			kicker->HasThrowPath = true;
+			kicker->ThrowBallDirection = {
+				floatArr[4] - floatArr[0],
+				floatArr[5] - floatArr[1],
+				floatArr[6] - floatArr[2]
+			};
+			maths::normalize_2d(*reinterpret_cast<vector2*>(&kicker->ThrowBallDirection));
+			floatArr += 8;
+			index += 9;
+			break;
 		default:
 			return error(10, 20);
 		}
-		if (floorVal != 404)
+		if (floorVal != 404 && floorVal != 410)
 		{
 			floatArr++;
 			index += 2;

@@ -10,8 +10,10 @@
 #include "TBall.h"
 #include "timer.h"
 #include "TPinballTable.h"
+#include "FtAccelDebug.h" // FTDBG
 
-TPlunger::TPlunger(TPinballTable* table, int groupIndex) : TCollisionComponent(table, groupIndex, true)
+TPlunger::TPlunger(TPinballTable* table, int groupIndex, bool launcher)
+	: TCollisionComponent(table, groupIndex, true), LauncherFlag(launcher)
 {
 	visualStruct visual{};
 
@@ -24,24 +26,48 @@ TPlunger::TPlunger(TPinballTable* table, int groupIndex) : TCollisionComponent(t
 	HardHitSoundId = visual.Kicker.HardHitSoundId;
 	Threshold = 1000000000.0;
 
-    // FT:MaxPullback = 50; 3DPB: MaxPullback = 100, PullbackIncrement is floored.
-    if (pb::FullTiltMode)
-    {
-        MaxPullback = 50;
-        PullbackIncrement = MaxPullback / (ListBitmap->size() * 8.0f);
-    }
-    else
-    {
-        MaxPullback = 100;
-        PullbackIncrement = std::floor(MaxPullback / (ListBitmap->size() * 8.0f));
-    }
+	// CADET.EXE's TPlunger constructor (0x418800). 3DPB hardcodes MaxPullback and
+	// floors the increment; Full Tilt reads MaxPullback out of float attribute 402,
+	// defaulting to 50 when the group has none (0x41887f), and does not floor.
+	// Skulduggery's s_launcher1 carries 402 = 100.
+	if (pb::FullTiltMode)
+	{
+		float* maxPullbackAttr = loader::query_float_attribute_opt(groupIndex, 0, 402);
+		MaxPullback = maxPullbackAttr ? maxPullbackAttr[0] : 50.0f;
+
+		// 0x418885: the launcher skips this whole computation, so PullbackIncrement
+		// keeps the zero the calloc at 0x42acf9 left. That is not a loose end -- the
+		// launcher never charges up (see PlungerInputPressed below), and its collision
+		// boost comes from the SomeCounter path, which reads MaxPullback directly.
+		if (!LauncherFlag)
+		{
+			// 0x41888e: no sprite list, or an empty one, means one step to full.
+			PullbackIncrement = ListBitmap && !ListBitmap->empty()
+				                    ? MaxPullback / (ListBitmap->size() * 8.0f)
+				                    : MaxPullback;
+		}
+		else
+		{
+			PullbackIncrement = 0.0f;
+		}
+	}
+	else
+	{
+		MaxPullback = 100;
+		auto bmpCount = ListBitmap && !ListBitmap->empty() ? ListBitmap->size() : 1u;
+		PullbackIncrement = std::floor(MaxPullback / (bmpCount * 8.0f));
+	}
 
 	Elasticity = 0.5f;
 	Smoothness = 0.5f;
 	
 	PullbackDelay = 0.025f;
-	float* floatArr = loader::query_float_attribute(groupIndex, 0, 601);
-	table->PlungerPosition = {floatArr[0], floatArr[1]};
+	// 601 is where the plunger feeds the ball in. Skulduggery's launcher (object type
+	// 1034) is mapped onto TPlunger and need not carry one; absent means this component
+	// contributes no feed point, so leave the table's existing one alone.
+	float* floatArr = loader::query_float_attribute_opt(groupIndex, 0, 601);
+	if (floatArr)
+		table->PlungerPosition = {floatArr[0], floatArr[1]};
 }
 
 void TPlunger::Collision(TBall* ball, vector2* nextPosition, vector2* direction, float distance, TEdgeSegment* edge)
@@ -63,12 +89,24 @@ void TPlunger::Collision(TBall* ball, vector2* nextPosition, vector2* direction,
 
 int TPlunger::Message(MessageCode code, float value)
 {
+	if (ft_autodrain_enabled())
+		fprintf(stderr, "DBG-plunger msg=%d value=%f launcher=%d someCounter=%d multiball=%d\n",
+		        static_cast<int>(code), value, (int)LauncherFlag, SomeCounter, PinballTable->MultiballCount);
 	switch (code)
 	{
 	case MessageCode::PlungerInputPressed:
 		if (!PullbackStartedFlag && (!pb::FullTiltMode || PinballTable->MultiballCount > 0 && !PinballTable->
 			TiltLockFlag))
 		{
+			// 0x4189a4: the launcher has no pullback at all. Pressing the key fires it
+			// at once, at full power, via PlungerLaunchBall -- the cannon behaviour
+			// Skulduggery's s_launcher1 needs, since it has no plunger to charge.
+			if (LauncherFlag)
+			{
+				Message(MessageCode::PlungerLaunchBall, 0.0f);
+				break;
+			}
+
 			PullbackStartedFlag = true;
 			Boost = 0.0;
 			Threshold = 1000000000.0;
@@ -109,6 +147,9 @@ int TPlunger::Message(MessageCode code, float value)
 		PullbackTimer(0, this);
 		break;
 	case MessageCode::PlayerChanged:
+		// Full Tilt swaps the per-player MessageField before clearing the pullback,
+		// 0x418c48 call 0x413570.
+		FtPlayerFieldsSwap(value);
 		PullbackStartedFlag = false;
 		Boost = 0.0f;
 		Threshold = 1000000000.0f;
@@ -132,12 +173,16 @@ int TPlunger::Message(MessageCode code, float value)
 				timer::kill(PullbackTimer_);
 			PullbackTimer_ = 0;
 			loader::play_sound(SoundIndexP2, this, "TPlunger3");
-			SpriteSet(0);
+			// 0x418a3d: skipped for the launcher, which has no sprite list.
+			if (!LauncherFlag)
+				SpriteSet(0);
 			timer::set(PullbackDelay, this, ReleasedTimer);
 		}
 		break;
 	case MessageCode::Reset:
 	{
+		// 0x418c8c call 0x413550, ahead of the field clears and timer kills.
+		FtPlayerFieldsReset();
 		PullbackStartedFlag = false;
 		Boost = 0.0f;
 		Threshold = 1000000000.0f;
@@ -147,7 +192,9 @@ int TPlunger::Message(MessageCode code, float value)
 		timer::kill(PullbackTimer);
 		timer::kill(ReleasedTimer);
 
-		SpriteSet(0);
+		// 0x418cc5: skipped for the launcher, as above.
+		if (!LauncherFlag)
+			SpriteSet(0);
 		break;
 	}
 	default:
@@ -161,6 +208,8 @@ int TPlunger::Message(MessageCode code, float value)
 void TPlunger::BallFeedTimer(int timerId, void* caller)
 {
 	auto plunger = static_cast<TPlunger*>(caller);
+	if (ft_autodrain_enabled())
+		fprintf(stderr, "DBG-plunger BallFeedTimer fired\n");
 	plunger->Message(MessageCode::PlungerFeedBall, 0.0);
 }
 
@@ -184,6 +233,12 @@ void TPlunger::PullbackTimer(int timerId, void* caller)
 		plunger->PullbackTimer_ = 0;
 		plunger->Boost = plunger->MaxPullback;
 	}
+
+	// 0x418dea: with no sprite list there is nothing to step, and the original skips
+	// the whole block rather than calling SpriteSet with a degenerate index. That is
+	// the launcher's case on every tick.
+	if (!plunger->ListBitmap || plunger->ListBitmap->empty())
+		return;
 
 	int index = static_cast<int>(floor(
 		static_cast<float>(plunger->ListBitmap->size() - 1) *

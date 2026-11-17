@@ -28,10 +28,16 @@ int TRollover::Message(MessageCode code, float value)
 {
 	if (code == MessageCode::Reset)
 	{
+		// Full Tilt clears the per-player fields first, 0x415770 call 0x413550.
+		FtPlayerFieldsReset();
 		ActiveFlag = 1;
 		RolloverFlag = 0;
 		SpriteSet(0);
 	}
+	// Full Tilt, 0x4157a5: PlayerChanged only swaps the per-player MessageField
+	// (0x4157b3 call 0x413570). TTripwire shares this Message (vtable 0x4375e0).
+	if (code == MessageCode::PlayerChanged)
+		FtPlayerFieldsSwap(value);
 	return 0;
 }
 
@@ -65,10 +71,16 @@ void TRollover::build_walls(int groupIndex)
 	visualStruct visual{};
 
 	loader::query_visual(groupIndex, 0, &visual);
-	float* arr1 = loader::query_float_attribute(groupIndex, 0, 600);
-	TEdgeSegment::install_wall(arr1, this, &ActiveFlag, visual.CollisionGroup, 0.0, 600);
-	float* arr2 = loader::query_float_attribute(groupIndex, 0, 603);
-	TEdgeSegment::install_wall(arr2, this, &RolloverFlag, visual.CollisionGroup, 0.0, 603);
+	// 600 is the rollover's trip wall, 603 the second wall that only collides while the
+	// rollover is already tripped. Dragon's light rollovers carry one or neither, and
+	// install_wall reads *floatArr for the wall type. Absent means no such wall:
+	// install nothing.
+	float* arr1 = loader::query_float_attribute_opt(groupIndex, 0, 600);
+	if (arr1)
+		TEdgeSegment::install_wall(arr1, this, &ActiveFlag, visual.CollisionGroup, 0.0, 600);
+	float* arr2 = loader::query_float_attribute_opt(groupIndex, 0, 603);
+	if (arr2)
+		TEdgeSegment::install_wall(arr2, this, &RolloverFlag, visual.CollisionGroup, 0.0, 603);
 }
 
 void TRollover::TimerExpired(int timerId, void* caller)

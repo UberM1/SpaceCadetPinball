@@ -11,7 +11,8 @@
 TPopupTarget::TPopupTarget(TPinballTable* table, int groupIndex) : TCollisionComponent(table, groupIndex, true)
 {
 	Timer = 0;
-	TimerTime = *loader::query_float_attribute(groupIndex, 0, 407);
+	// 407 is the re-arm delay after the target is knocked down. Absent means none.
+	TimerTime = loader::query_float_attribute(groupIndex, 0, 407, 0.0f);
 }
 
 int TPopupTarget::Message(MessageCode code, float value)

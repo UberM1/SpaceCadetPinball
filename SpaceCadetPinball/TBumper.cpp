@@ -14,7 +14,9 @@ TBumper::TBumper(TPinballTable* table, int groupIndex) : TCollisionComponent(tab
 
 	BmpIndex = 0;
 	Timer = 0;
-	TimerTime = *loader::query_float_attribute(groupIndex, 0, 407);
+	// 407 is the lamp-fade delay. Absent means no delay was authored, so the fade timer
+	// expires on the next tick; the defaulted overload keeps that explicit.
+	TimerTime = loader::query_float_attribute(groupIndex, 0, 407, 0.0f);
 	loader::query_visual(groupIndex, 0, &visual);
 	SoundIndex4 = visual.SoundIndex4;
 	SoundIndex3 = visual.SoundIndex3;
@@ -27,8 +29,9 @@ int TBumper::Message(MessageCode code, float value)
 	{
 	case MessageCode::TBumperSetBmpIndex:
 		{
+			// A sprite-less bumper has no lit states to step through.
 			auto nextBmp = static_cast<int>(floor(value));
-			auto maxBmp = static_cast<int>(ListBitmap->size()) - 1;
+			auto maxBmp = ListBitmap ? static_cast<int>(ListBitmap->size()) - 1 : 0;
 			if (2 * nextBmp > maxBmp)
 				nextBmp = maxBmp / 2;
 			if (nextBmp < 0)
@@ -48,7 +51,7 @@ int TBumper::Message(MessageCode code, float value)
 	case MessageCode::TBumperIncBmpIndex:
 		{
 			auto nextBmp = BmpIndex + 1;
-			auto maxBmp = static_cast<int>(ListBitmap->size()) - 1;
+			auto maxBmp = ListBitmap ? static_cast<int>(ListBitmap->size()) - 1 : 0;
 			if (2 * nextBmp > maxBmp)
 				nextBmp = maxBmp / 2;
 			TBumper::Message(MessageCode::TBumperSetBmpIndex, static_cast<float>(nextBmp));

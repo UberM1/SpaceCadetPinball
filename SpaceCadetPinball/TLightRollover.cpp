@@ -15,13 +15,21 @@ TLightRollover::TLightRollover(TPinballTable* table, int groupIndex) : TRollover
 	Timer = 0;
 	SpriteSet(-1);
 	build_walls(groupIndex);
-	FloatArr = *loader::query_float_attribute(groupIndex, 0, 407);
+	// 407 is the lit-state hold time. Several of Dragon's light rollovers omit it;
+	// absent means no hold, i.e. the sprite clears on the next tick.
+	FloatArr = loader::query_float_attribute(groupIndex, 0, 407, 0.0f);
 }
 
 int TLightRollover::Message(MessageCode code, float value)
 {
+	// Full Tilt, 0x4159f8: PlayerChanged only swaps the per-player MessageField
+	// (0x415a06 call 0x413570).
+	if (code == MessageCode::PlayerChanged)
+		FtPlayerFieldsSwap(value);
 	if (code == MessageCode::Reset)
 	{
+		// Full Tilt clears the per-player fields first, 0x4159c0 call 0x413550.
+		FtPlayerFieldsReset();
 		ActiveFlag = 1;
 		RolloverFlag = 0;
 		if (Timer)

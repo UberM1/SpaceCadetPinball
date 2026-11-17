@@ -24,7 +24,7 @@ TDemo::TDemo(TPinballTable* table, int groupIndex)
 	FlipRightFlag = 0;
 	FlipLeftFlag = 0;
 	table->Demo = this;
-	auto floatArr1 = loader::query_float_attribute(groupIndex, 0, 407);
+	auto floatArr1 = loader::query_float_attribute_opt(groupIndex, 0, 407);
 	if (floatArr1)
 	{
 		FlipTimerTime1 = floatArr1[0];
@@ -40,20 +40,45 @@ TDemo::TDemo(TPinballTable* table, int groupIndex)
 		UnFlipTimerTime2 = 0.1f;
 	}
 	loader::query_visual(groupIndex, 0, &visual);
-	auto v5 = loader::query_float_attribute(groupIndex, 0, 1400);
-	Edge1 = TEdgeSegment::install_wall(v5, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1400);
+	// 1400..1404 are the five trigger walls the demo AI aims at. install_wall reads
+	// *floatArr to pick a wall type, so each must be checked. A demo group that omits
+	// one simply has no wall there -- install nothing and leave the edge handle null;
+	// the demo's own code already tests Edge1/Edge2/Edge3 by identity only.
+	auto v5 = loader::query_float_attribute_opt(groupIndex, 0, 1400);
+	Edge1 = v5 ? TEdgeSegment::install_wall(v5, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1400) : nullptr;
 
-	auto v6 = loader::query_float_attribute(groupIndex, 0, 1401);
-	TEdgeSegment::install_wall(v6, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1401);
+	auto v6 = loader::query_float_attribute_opt(groupIndex, 0, 1401);
+	if (v6)
+		TEdgeSegment::install_wall(v6, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1401);
 
-	auto v7 = loader::query_float_attribute(groupIndex, 0, 1402);
-	Edge2 = TEdgeSegment::install_wall(v7, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1402);
+	auto v7 = loader::query_float_attribute_opt(groupIndex, 0, 1402);
+	Edge2 = v7 ? TEdgeSegment::install_wall(v7, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1402) : nullptr;
 
-	auto v8 = loader::query_float_attribute(groupIndex, 0, 1403);
-	TEdgeSegment::install_wall(v8, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1403);
+	auto v8 = loader::query_float_attribute_opt(groupIndex, 0, 1403);
+	if (v8)
+		TEdgeSegment::install_wall(v8, this, &ActiveFlag, visual.CollisionGroup, 0.0, 1403);
 
-	auto v9 = loader::query_float_attribute(groupIndex, 0, 1404);
-	Edge3 = TEdgeSegment::install_wall(v9, this, &ActiveFlag, visual.CollisionGroup, table->CollisionCompOffset, 1404);
+	auto v9 = loader::query_float_attribute_opt(groupIndex, 0, 1404);
+	Edge3 = v9
+		? TEdgeSegment::install_wall(v9, this, &ActiveFlag, visual.CollisionGroup, table->CollisionCompOffset, 1404)
+		: nullptr;
+
+	// Full Tilt, 0x417bbc..0x417c2f: two optional extra flip-trigger walls, each on a
+	// collision layer of its own choosing rather than the demo group's, which is what
+	// lets the demo work the upper flippers. Each attribute is {layer, wall...}: the
+	// layer is truncated (0x417bdc / 0x417c15 call 0x42c7c8, ftol) into a mask
+	// 1 << layer, and the wall after it is installed with offset 0 and the wall value
+	// of the wall it duplicates -- 1405 as 1401 (flip left, 0x417be3 push 0x579), 1406
+	// as 1403 (flip right, 0x417c1c push 0x57b). In the data: DRAGON.DAT 1406 on layer
+	// 0; PIRATES.DAT 1405 on layer 0 and 1406 on layer 2; CADET.DAT and PINBALL.DAT
+	// carry neither.
+	auto v10 = loader::query_float_attribute_opt(groupIndex, 0, 1405);
+	if (v10)
+		TEdgeSegment::install_wall(v10 + 1, this, &ActiveFlag, 1u << static_cast<int>(v10[0]), 0.0, 1401);
+
+	auto v11 = loader::query_float_attribute_opt(groupIndex, 0, 1406);
+	if (v11)
+		TEdgeSegment::install_wall(v11 + 1, this, &ActiveFlag, 1u << static_cast<int>(v11[0]), 0.0, 1403);
 }
 
 int TDemo::Message(MessageCode code, float value)
@@ -86,6 +111,14 @@ int TDemo::Message(MessageCode code, float value)
 			UnFlipRight(0, this);
 		if (PlungerFlag)
 			PlungerRelease(0, this);
+		// Full Tilt's Reset arm (jump-table slot 0x402 -> 0x41835d) is this call to
+		// 0x413550 alone.
+		FtPlayerFieldsReset();
+		break;
+	case MessageCode::PlayerChanged:
+		// Full Tilt, slot 0x3fe -> 0x418305: the per-player MessageField swap
+		// (0x41830c call 0x413570) and nothing else.
+		FtPlayerFieldsSwap(value);
 		break;
 	default:
 		break;

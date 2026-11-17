@@ -18,6 +18,7 @@ public:
 	static int kill(void (*callback)(int, void*));
 	static int set(float time, void* caller, void (* callback)(int, void*));
 	static int check();
+	static float remaining(int timerId);
 
 private:
 	static int SetCount;

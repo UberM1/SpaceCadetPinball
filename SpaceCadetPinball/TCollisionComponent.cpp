@@ -25,9 +25,15 @@ TCollisionComponent::TCollisionComponent(TPinballTable* table, int groupIndex, b
 		loader::query_visual(groupIndex, 0, &visual);
 		if (createWall)
 		{
+			// Full Tilt's bonus tables have blockers with no wall at all -- Dragon's
+			// a_sword, a_jaw, a_center_post and the two rocks, Skulduggery's a_cannon
+			// and a_bloce. They read as animated props rather than collidable bodies.
+			// Space Cadet has none, so the original code dereferenced the result
+			// unconditionally and crashed here on either bonus table.
 			float offset = table->CollisionCompOffset;
-			float* floatArr = loader::query_float_attribute(groupIndex, 0, 600);
-			TEdgeSegment::install_wall(floatArr, this, &ActiveFlag, visual.CollisionGroup, offset, 0);
+			float* floatArr = loader::query_float_attribute_opt(groupIndex, 0, 600);
+			if (floatArr)
+				TEdgeSegment::install_wall(floatArr, this, &ActiveFlag, visual.CollisionGroup, offset, 0);
 		}
 	}
 

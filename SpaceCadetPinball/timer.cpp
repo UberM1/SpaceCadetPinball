@@ -90,6 +90,20 @@ int timer::kill(void(* callback)(int, void*))
 	return count;
 }
 
+// Seconds until the timer fires, negative once it is overdue, 0 for an id that is
+// not armed. The originals' is at 0x41f880 in DRAGON.EXE; TTimer's 0x48 arm is its
+// only caller there.
+float timer::remaining(int timerId)
+{
+	auto current = ActiveList;
+	for (int index = 0; index < Count; ++index, current = current->NextTimer)
+	{
+		if (current->TimerId == timerId)
+			return static_cast<float>(current->TargetTime - pb::time_ticks) / 1000.0f;
+	}
+	return 0.0f;
+}
+
 int timer::set(float time, void* caller, void (* callback)(int, void*))
 {
 	if (Count >= MaxCount)

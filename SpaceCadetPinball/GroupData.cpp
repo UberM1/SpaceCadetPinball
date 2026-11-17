@@ -111,23 +111,24 @@ void GroupData::SplitSplicedBitmap(const gdrv_bitmap8& srcBmp, gdrv_bitmap8& bmp
 	zdrv::fill(&zMap, zMap.Width, zMap.Height, 0, 0, 0xFFFF);
 	zMap.Resolution = srcBmp.Resolution;
 
+	// A gap is an absolute advance through a framebuffer whose stride is the table
+	// width, not a destination-relative one, so the destination index has to be
+	// recomputed from the table-space position on every run. Compensating the gap once
+	// by `bmp.Width - tableWidth` is only right when it crosses exactly one row
+	// boundary; a sprite with blank rows emits a gap that crosses several, and the
+	// single compensation then leaves the index thousands of pixels past the buffer.
 	auto tableWidth = fullscrn::resolution_array[srcBmp.Resolution].TableWidth;
 	auto src = reinterpret_cast<uint16_t*>(srcBmp.IndexedBmpPtr);
 	auto srcChar = reinterpret_cast<char**>(&src);
-	for (int dstInd = 0;;)
+	for (int tablePos = 0;;)
 	{
 		auto stride = static_cast<int16_t>(*src++);
 		if (stride < 0)
 			break;
 
-		// Stride is in terms of dst stride, hardcoded to match vScreen width in current resolution
-		if (stride > bmp.Width)
-		{
-			stride += bmp.Width - tableWidth;
-			assertm(stride >= 0, "Spliced bitmap: negative computed stride");
-		}
-
-		dstInd += stride;
+		tablePos += stride;
+		auto dstInd = tablePos / tableWidth * bmp.Stride + tablePos % tableWidth;
+		assertm(dstInd >= 0 && dstInd < bmp.Stride * bmp.Height, "Spliced bitmap: index out of range");
 		for (auto count = *src++; count; count--)
 		{
 			auto depth = *src++;
@@ -136,13 +137,21 @@ void GroupData::SplitSplicedBitmap(const gdrv_bitmap8& srcBmp, gdrv_bitmap8& bmp
 
 			(*srcChar)++;
 			dstInd++;
+			tablePos++;
 		}
 	}
 }
 
 void GroupData::SetBitmap(gdrv_bitmap8* bmp)
 {
-	assertm(Bitmaps[bmp->Resolution] == nullptr, "GroupData: bitmap override");
+	// A group holds at most one bitmap per resolution -- except on the bonus tables,
+	// where every ball state carries a second one at the same resolution: an alternate
+	// ball skin (Dragon's Keep a yellow smiley, Skulduggery a brass ball) that nothing
+	// in the engine selects. The 28/25 groups that do this are all ball0/ball1/ball2
+	// states; no other group in CADET.DAT, DRAGON.DAT or PIRATES.DAT has a duplicate.
+	// The first bitmap is the default skin, so keep it and ignore the alternates.
+	if (Bitmaps[bmp->Resolution])
+		return;
 	Bitmaps[bmp->Resolution] = bmp;
 
 	auto zMap = ZMaps[bmp->Resolution];

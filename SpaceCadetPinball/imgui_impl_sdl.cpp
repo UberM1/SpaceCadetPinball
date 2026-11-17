@@ -443,7 +443,19 @@ static void ImGui_ImplSDL2_UpdateMouseData()
     // We forward mouse input when hovered or captured (via SDL_MOUSEMOTION) or when focused (below)
 #if SDL_HAS_CAPTURE_AND_GLOBAL_MOUSE
     // SDL_CaptureMouse() let the OS know e.g. that our imgui drag outside the SDL window boundaries shouldn't e.g. trigger other operations outside
-    SDL_CaptureMouse((bd->MouseButtonsDown != 0 && ImGui::GetDragDropPayload() == nullptr) ? SDL_TRUE : SDL_FALSE);
+    //
+    // Only on a change of state, and a refusal is not an error worth reporting: Wayland and the
+    // dummy video driver have no mouse capture, so calling this every frame left "That operation
+    // is not supported" in SDL's error slot every frame, which winmain's main loop then printed
+    // once per frame -- thousands of lines a minute, burying anything real.
+    static int last_capture = -1;
+    const int want_capture = (bd->MouseButtonsDown != 0 && ImGui::GetDragDropPayload() == nullptr) ? 1 : 0;
+    if (want_capture != last_capture)
+    {
+        last_capture = want_capture;
+        if (SDL_CaptureMouse(want_capture ? SDL_TRUE : SDL_FALSE) != 0)
+            SDL_ClearError();
+    }
     SDL_Window* focused_window = SDL_GetKeyboardFocus();
     const bool is_app_focused = (bd->Window == focused_window);
 #else

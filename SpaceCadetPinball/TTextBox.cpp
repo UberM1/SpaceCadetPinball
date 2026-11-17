@@ -26,11 +26,17 @@ TTextBox::TTextBox(TPinballTable* table, int groupIndex) : TPinballComponent(tab
 	{
 		/*Full tilt: text box dimensions index is offset by resolution*/
 		int arrLength;
-		auto dimensions = loader::query_iattribute(groupIndex + fullscrn::GetResolution(), 1500, &arrLength);
-		OffsetX = dimensions[0];
-		OffsetY = dimensions[1];
-		Width = dimensions[2];
-		Height = dimensions[3];
+		// 1500 is the box rectangle for this resolution. Absent means the box has no
+		// authored geometry: keep the zero rect set above, which draws nothing, rather
+		// than invent a position on the playfield.
+		auto dimensions = loader::query_iattribute_opt(groupIndex + fullscrn::GetResolution(), 1500, &arrLength);
+		if (dimensions && arrLength >= 4)
+		{
+			OffsetX = dimensions[0];
+			OffsetY = dimensions[1];
+			Width = dimensions[2];
+			Height = dimensions[3];
+		}
 	}
 }
 
@@ -53,6 +59,14 @@ TTextBox::~TTextBox()
 
 int TTextBox::Message(MessageCode code, float value)
 {
+	// Full Tilt, 0x41e110 is nothing but the two player-field arms: 0x3fe -> 0x41e12c
+	// call 0x413570, 0x402 -> 0x41e136 call 0x413550. It matters because Dragon's Keep
+	// keeps its quest number in info_text_box's MessageField, so the quest is per
+	// player and a new game starts from none. Both helpers are no-ops on 3D Pinball data.
+	if (code == MessageCode::PlayerChanged)
+		FtPlayerFieldsSwap(value);
+	else if (code == MessageCode::Reset)
+		FtPlayerFieldsReset();
 	return 0;
 }
 
@@ -102,12 +116,35 @@ void TTextBox::Clear(bool lowPriorityOnly)
 		Draw();
 }
 
+score_msg_font_type* TTextBox::FontFor(const TTextBoxMessage* message) const
+{
+	// Height 0 would mean a group that exists but holds no bitmaps, and the layout
+	// loop below advances by the font height -- it would spin forever. Treat such a
+	// font as absent.
+	if (message && message->Glyph && score::glyph_fontp && score::glyph_fontp->Height > 0)
+		return score::glyph_fontp;
+	return Font;
+}
+
+void TTextBox::DisplayGlyph(const char* text, float time)
+{
+	DisplayInternal(text, time, false, true);
+}
+
 void TTextBox::Display(const char* text, float time, bool lowPriority)
+{
+	DisplayInternal(text, time, lowPriority, false);
+}
+
+void TTextBox::DisplayInternal(const char* text, float time, bool lowPriority, bool glyph)
 {
 	if (!text)
 		return;
 
-	if (CurrentMessage && !strcmp(text, PreviousMessage->Text))
+	// The de-duplication has to take the font into account as well as the text: a
+	// glyph token and a piece of ordinary text can be the same string ("K", "5") and
+	// refreshing one in place of the other would draw it in the wrong font.
+	if (CurrentMessage && !strcmp(text, PreviousMessage->Text) && PreviousMessage->Glyph == glyph)
 	{
 		PreviousMessage->Refresh(time);
 		if (PreviousMessage == CurrentMessage)
@@ -125,7 +162,7 @@ void TTextBox::Display(const char* text, float time, bool lowPriority)
 		if (Timer == -1)
 			Clear();
 
-		auto message = new TTextBoxMessage(text, time, lowPriority);
+		auto message = new TTextBoxMessage(text, time, lowPriority, glyph);
 		if (message->Text)
 		{
 			if (CurrentMessage)
@@ -230,14 +267,18 @@ void TTextBox::Draw()
 			return;
 		}
 
+		// Per message, not per box: the same box alternates between announcements in
+		// the text font and glyph runs in the symbol font.
+		auto font = FontFor(CurrentMessage);
+
 		std::vector<LayoutResult> lines{};
 		auto textHeight = 0;
-		for (auto text = CurrentMessage->Text; ; textHeight += Font->Height)
+		for (auto text = CurrentMessage->Text; ; textHeight += font->Height)
 		{
-			if (!text[0] || textHeight + Font->Height > Height)
+			if (!text[0] || textHeight + font->Height > Height)
 				break;
 
-			auto line = LayoutTextLine(text);
+			auto line = LayoutTextLine(text, font);
 			if (line.Start == line.End)
 				break;
 			lines.push_back(line);
@@ -255,7 +296,7 @@ void TTextBox::Draw()
 				offX += (Width - line.Width) / 2;
 			for (auto text = line.Start; text < line.End; text++)
 			{
-				auto charBmp = Font->Chars[*text & 0x7F];
+				auto charBmp = font->Chars[*text & 0x7F];
 				if (charBmp)
 				{
 					auto height = charBmp->Height;
@@ -265,15 +306,15 @@ void TTextBox::Draw()
 						                                 0);
 					else
 						gdrv::copy_bitmap(render::vscreen, width, height, offX, offY, charBmp, 0, 0);
-					offX += charBmp->Width + Font->GapWidth;
+					offX += charBmp->Width + font->GapWidth;
 				}
 			}
-			offY += Font->Height;
+			offY += font->Height;
 		}
 	}
 }
 
-TTextBox::LayoutResult TTextBox::LayoutTextLine(char* textStart) const
+TTextBox::LayoutResult TTextBox::LayoutTextLine(char* textStart, const score_msg_font_type* font) const
 {
 	auto lineWidth = 0, wordWidth = 0;
 	char *wordBoundary = nullptr, *textEnd;
@@ -283,11 +324,11 @@ TTextBox::LayoutResult TTextBox::LayoutTextLine(char* textStart) const
 		if (!maskedChar || maskedChar == '\n')
 			break;
 
-		auto charBmp = Font->Chars[maskedChar];
+		auto charBmp = font->Chars[maskedChar];
 		if (!charBmp)
 			continue;
 
-		auto width = lineWidth + charBmp->Width + Font->GapWidth;
+		auto width = lineWidth + charBmp->Width + font->GapWidth;
 		if (width > Width)
 		{
 			if (wordBoundary)

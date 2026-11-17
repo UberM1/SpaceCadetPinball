@@ -9,6 +9,7 @@
 #include "pb.h"
 #include "render.h"
 #include "Sound.h"
+#include "table_rules.h"
 #include "translations.h"
 #include "font_selection.h"
 
@@ -757,19 +758,31 @@ void winmain::RenderUi()
 			}
 			if (ImGui::BeginMenu("Cheats"))
 			{
+				// A table with its own key handler gets its own codes here: pb::PushCheat
+				// types them into it. Dragon's Keep (0x4282c0) knows 1MAX, NMAX, PB and
+				// QUOTE; Skulduggery (0x42a830) 1MAX, NMAX, GMAX and QUOTE. Space Cadet's
+				// bmax, rmax and easy mode, and its gmax on Dragon's Keep, have no
+				// counterpart and reach tags those tables do not bind, so they are hidden.
+				const bool tableKeys = CurrentTable->KeyHandler != nullptr;
+				const bool isDragon = CurrentTable->Id == TableId::DragonsKeep;
+				const bool isPirates = CurrentTable->Id == TableId::Skulduggery;
 				if (ImGui::MenuItem("hidden test", nullptr, pb::cheat_mode))
 					pb::PushCheat("hidden test");
 				if (ImGui::MenuItem("1max"))
 					pb::PushCheat("1max");
-				if (ImGui::MenuItem("bmax", nullptr, control::table_unlimited_balls))
+				if (!tableKeys && ImGui::MenuItem("bmax", nullptr, control::table_unlimited_balls))
 					pb::PushCheat("bmax");
-				if (ImGui::MenuItem("gmax"))
+				if ((!tableKeys || isPirates) && ImGui::MenuItem("gmax"))
 					pb::PushCheat("gmax");
-				if (ImGui::MenuItem("rmax"))
+				if (!tableKeys && ImGui::MenuItem("rmax"))
 					pb::PushCheat("rmax");
+				if (tableKeys && ImGui::MenuItem("nmax"))
+					pb::PushCheat("nmax");
+				if (tableKeys && isDragon && ImGui::MenuItem("pb"))
+					pb::PushCheat("pb");
 				if (pb::FullTiltMode && ImGui::MenuItem("quote"))
 					pb::PushCheat("quote");
-				if (ImGui::MenuItem("easy mode", nullptr, control::easyMode))
+				if (!tableKeys && ImGui::MenuItem("easy mode", nullptr, control::easyMode))
 					pb::PushCheat("easy mode");
 
 				ImGui::EndMenu();

@@ -5,7 +5,9 @@ class TPlunger :
 	public TCollisionComponent
 {
 public:
-	TPlunger(TPinballTable* table, int groupIndex);
+	// `launcher` is CADET.EXE's third constructor argument: 0 for the ordinary
+	// plunger (object type 1001), 1 for Skulduggery's ball launcher (1034).
+	TPlunger(TPinballTable* table, int groupIndex, bool launcher = false);
 	~TPlunger() override = default;
 	void Collision(TBall* ball, vector2* nextPosition, vector2* direction, float distance,
 	               TEdgeSegment* edge) override;
@@ -24,4 +26,11 @@ public:
 	int SoundIndexP2;
 	bool PullbackStartedFlag{};
 	int SomeCounter{};
+	// CADET.EXE's TPlunger field +0x96, the last dword of the 0x9a-byte object.
+	// Four reads, all of them "this plunger has no pullback and no sprites":
+	//   ctor (0x418885)                  skip the PullbackIncrement computation
+	//   PlungerInputPressed (0x4189a4)   launch at once instead of charging up
+	//   PlungerInputReleased (0x418a3d)  skip SpriteSet(0)
+	//   Reset (0x418cc5)                 skip SpriteSet(0)
+	bool LauncherFlag{};
 };
