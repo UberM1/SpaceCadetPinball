@@ -61,7 +61,9 @@ TPlunger::TPlunger(TPinballTable* table, int groupIndex, bool launcher)
 	Elasticity = 0.5f;
 	Smoothness = 0.5f;
 	
-	PullbackDelay = 0.025f;
+	// 0x4188e3: Full Tilt steps the pullback every 0.05 s ([+0x82] = 0x3ccccccd, read by
+	// PullbackTimer at 0x418dbe/0x418dd2); 3DPB every 0.025 s.
+	PullbackDelay = pb::FullTiltMode ? 0.05f : 0.025f;
 	// 601 is where the plunger feeds the ball in. Skulduggery's launcher (object type
 	// 1034) is mapped onto TPlunger and need not carry one; absent means this component
 	// contributes no feed point, so leave the table's existing one alone.
@@ -176,7 +178,13 @@ int TPlunger::Message(MessageCode code, float value)
 			// 0x418a3d: skipped for the launcher, which has no sprite list.
 			if (!LauncherFlag)
 				SpriteSet(0);
-			timer::set(PullbackDelay, this, ReleasedTimer);
+			// 0x418aa0: Full Tilt holds the release boost for 0.2 s (push 0x3e4ccccd)
+			// before ReleasedTimer (0x418930) drops it; 3DPB reuses PullbackDelay,
+			// 0.025 s. A ball resting on the plunger only collides with it every
+			// frame or two, so the 25 ms window often closed with no collision in it
+			// and the key press did nothing -- on Skulduggery's launcher, where the
+			// press is the release, most presses were lost.
+			timer::set(pb::FullTiltMode ? 0.2f : PullbackDelay, this, ReleasedTimer);
 		}
 		break;
 	case MessageCode::Reset:
