@@ -212,6 +212,14 @@ struct TableRules
 	//
 	// Null for Space Cadet, whose backdoor stays exactly as it was.
 	void (*KeyHandler)(int key, bool flipper);
+
+	// How long the "Player N" / demo "Player N" text stays up, the time each table's
+	// text-event function passes to TTextBox::Display for codes 0x60..0x67:
+	// CADET.EXE 0x42a750 6.0 s (`push 0x40c00000`, e.g. 0x42a8b9), PIRATES.EXE
+	// 0x422b90 1.0 s (`push 0x3f800000`, e.g. 0x422cf0), DRAGON.EXE 0x422b80 untimed
+	// (`push 0xbf800000`, e.g. 0x422ce0). 0 means untimed (-1), which is also
+	// 3D Pinball's, so rows that leave it out keep upstream's behaviour.
+	float PlayerTextTime;
 };
 
 // The table in play. Replaces pb::FullTiltMode / pb::FullTiltDemoMode, which

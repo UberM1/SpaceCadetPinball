@@ -39,6 +39,7 @@ public:
 	int AddScore(int score);
 	void ChangeBallCount(int count);
 	void tilt(float time);
+	static float PlayerTextTime();
 	void port_draw() override;
 	int Message(MessageCode code, float value) override;
 	TBall* AddBall(vector2 position);

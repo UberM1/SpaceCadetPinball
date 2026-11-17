@@ -391,6 +391,14 @@ void TPinballTable::ChangeBallCount(int count)
 	}
 }
 
+// The time the "Player N" texts stay up: the table's own (TableRules::PlayerTextTime),
+// untimed where it is 0, which is 3D Pinball's and Dragon's Keep's.
+float TPinballTable::PlayerTextTime()
+{
+	auto time = CurrentTable ? CurrentTable->PlayerTextTime : 0.0f;
+	return time > 0.0f ? time : -1.0f;
+}
+
 void TPinballTable::tilt(float time)
 {
 	if (!TiltLockFlag && !BallInDrainFlag)
@@ -504,8 +512,11 @@ int TPinballTable::Message(MessageCode code, float value)
 			rc_text = pb::get_rc_string(Msg::STRING131);
 		else
 			rc_text = pb::get_rc_string(Msg::STRING127);
-		if (pb::InfoTextBox)
-			pb::InfoTextBox->Display(rc_text, -1.0);
+		// Full Tilt shows it only when the table has a demo part, 0x4197e7..0x4197ef
+		// (`mov eax,[edi+0x112] / test / je` past the text call), and for the table's
+		// own time (PlayerTextTime). Same bytes in CADET.EXE.
+		if (pb::InfoTextBox && (!pb::FullTiltMode || Demo))
+			pb::InfoTextBox->Display(rc_text, PlayerTextTime());
 		if (Demo)
 			Demo->Message(MessageCode::NewGame, 0.0);
 		break;
@@ -609,12 +620,12 @@ int TPinballTable::Message(MessageCode code, float value)
 			if (PlayerCount <= 1)
 			{
 				const char* textboxText;
-				if (Demo->ActiveFlag)
+				if (Demo && Demo->ActiveFlag)
 					textboxText = pb::get_rc_string(Msg::STRING131);
 				else
 					textboxText = pb::get_rc_string(Msg::STRING127);
 				if (pb::InfoTextBox)
-					pb::InfoTextBox->Display(textboxText, -1.0);
+					pb::InfoTextBox->Display(textboxText, PlayerTextTime());
 				break;
 			}
 
@@ -660,25 +671,25 @@ int TPinballTable::Message(MessageCode code, float value)
 			switch (nextPlayer)
 			{
 			case 0:
-				if (Demo->ActiveFlag)
+				if (Demo && Demo->ActiveFlag)
 					textboxText = pb::get_rc_string(Msg::STRING131);
 				else
 					textboxText = pb::get_rc_string(Msg::STRING127);
 				break;
 			case 1:
-				if (Demo->ActiveFlag)
+				if (Demo && Demo->ActiveFlag)
 					textboxText = pb::get_rc_string(Msg::STRING132);
 				else
 					textboxText = pb::get_rc_string(Msg::STRING128);
 				break;
 			case 2:
-				if (Demo->ActiveFlag)
+				if (Demo && Demo->ActiveFlag)
 					textboxText = pb::get_rc_string(Msg::STRING133);
 				else
 					textboxText = pb::get_rc_string(Msg::STRING129);
 				break;
 			case 3:
-				if (Demo->ActiveFlag)
+				if (Demo && Demo->ActiveFlag)
 					textboxText = pb::get_rc_string(Msg::STRING134);
 				else
 					textboxText = pb::get_rc_string(Msg::STRING130);
@@ -689,7 +700,7 @@ int TPinballTable::Message(MessageCode code, float value)
 
 			if (textboxText != nullptr)
 				if (pb::InfoTextBox)
-					pb::InfoTextBox->Display(textboxText, -1);
+					pb::InfoTextBox->Display(textboxText, PlayerTextTime());
 			JackpotScoreFlag = false;
 			BonusScoreFlag = false;
 			UnknownP71 = 0;
