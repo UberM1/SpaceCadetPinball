@@ -305,6 +305,7 @@ void pb::ballset(float dx, float dy)
 // ---- FTDBG: temporary autodrain harness (remove before finishing) ----
 #include "TDrain.h"
 #include "FtAccelDebug.h"
+#include "FtRestDump.h"
 void ft_autodrain_tick(float dtSec)
 {
 	static int enabled = -1;
@@ -367,6 +368,7 @@ void pb::frame(float dtMilliSec)
 {
 	ft_autodrain_tick(dtMilliSec*0.001f);
 	ft_accel_tick(dtMilliSec*0.001f); // FTDBG
+	ft_restdump_tick(dtMilliSec*0.001f); // FTDBG
 	if (dtMilliSec > 100)
 		dtMilliSec = 100;
 	if (dtMilliSec <= 0)

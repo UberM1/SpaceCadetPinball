@@ -45,6 +45,7 @@ endforeach()
 
 set(SOURCE_FILES
         SpaceCadetPinball/FtAccelDebug.cpp
+        SpaceCadetPinball/FtRestDump.cpp
         SpaceCadetPinball/control.cpp
         SpaceCadetPinball/control.h
         SpaceCadetPinball/EmbeddedData.cpp
