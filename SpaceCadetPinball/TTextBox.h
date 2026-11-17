@@ -38,6 +38,13 @@ private:
 	static void TimerExpired(int timerId, void* caller);
 
 	void Draw();
+	void Render(bool withText = true);
+	// Full Tilt's queue (0x41de40 Display, 0x41dd30 scheduler, 0x41dce0 timer,
+	// 0x41d8e0 queue clear). Used only on Full Tilt data.
+	void FtDisplay(const char* text, float time, bool lowPriority, bool glyph);
+	bool FtSchedule();
+	void FtTimerExpired();
+	void FtClearQueue();
 	void DisplayInternal(const char* text, float time, bool lowPriority, bool glyph);
 	score_msg_font_type* FontFor(const TTextBoxMessage* message) const;
 	LayoutResult LayoutTextLine(char* textStart, const score_msg_font_type* font) const;
