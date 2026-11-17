@@ -506,13 +506,39 @@ static void autoplay(float dtSec)
 		else if (gNow - noBallSince > 1.0f)
 		{
 			noBallSince = -1.0f;
-			pb::replay_level(false);
+			// FT_AUTOPLAY_KEEP: keep the game (and its players) going; start a new
+			// one only after game over. Without it every gap of a second restarts.
+			if (!getenv("FT_AUTOPLAY_KEEP") || pb::game_mode == GameModes::GameOver)
+				pb::replay_level(false);
 			pb::launch_ball();
-			fprintf(stderr, "DBG-auto2 t=%7.2f relaunch\n", gNow);
+			fprintf(stderr, "DBG-auto2 t=%7.2f relaunch player=%d ball=%d\n", gNow,
+			        table->CurrentPlayer, table->BallCount);
 		}
 		return;
 	}
 	noBallSince = -1.0f;
+
+	// A ball sitting still (the plunger lane, after a launch the light show swallowed):
+	// pull the plunger again every 3 s.
+	// "Still" is by position: a ball resting on the plunger keeps a small speed.
+	static float stillSince = -1.0f;
+	static vector2 stillPos{};
+	const float dx = b->Position.X - stillPos.X, dy = b->Position.Y - stillPos.Y;
+	if (stillSince >= 0.0f && dx * dx + dy * dy < 0.01f)
+	{
+		if (gNow - stillSince > 3.0f)
+		{
+			stillSince = -1.0f;
+			pb::launch_ball();
+			fprintf(stderr, "DBG-auto2 t=%7.2f launch (ball still at %.2f,%.2f) player=%d ball=%d\n",
+			        gNow, b->Position.X, b->Position.Y, table->CurrentPlayer, table->BallCount);
+		}
+	}
+	else
+	{
+		stillSince = gNow;
+		stillPos = {b->Position.X, b->Position.Y};
+	}
 
 	// Flap both flippers.
 	if (gNow - lastFlip > 0.2f)

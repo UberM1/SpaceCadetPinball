@@ -4,9 +4,11 @@
 
 #include "control.h"
 #include "loader.h"
+#include "pb.h"
 #include "render.h"
 #include "timer.h"
 #include "TPinballTable.h"
+#include "FtAccelDebug.h" // FTDBG
 
 TBumper::TBumper(TPinballTable* table, int groupIndex) : TCollisionComponent(table, groupIndex, true)
 {
@@ -67,6 +69,18 @@ int TBumper::Message(MessageCode code, float value)
 		}
 	case MessageCode::PlayerChanged:
 		{
+			// Full Tilt ends the outgoing player's lamp flash first: 0x4142f9 mov
+			// eax,[esi+0x7a] (Timer) / 0x414301 call 0x41f900 (kill) / 0x41430b call
+			// 0x414020 (TimerExpired). Same bytes in CADET.EXE; 3D Pinball data keeps
+			// upstream's behaviour.
+			if (pb::FullTiltMode && Timer)
+			{
+				if (ft_autoplay_enabled())
+					fprintf(stderr, "DBG-pc    bumper %s lamp timer expired at player change\n",
+					        GroupName ? GroupName : "?"); // FTDBG
+				timer::kill(Timer);
+				TimerExpired(Timer, this);
+			}
 			auto playerPtr = &PlayerData[PinballTable->CurrentPlayer];
 			playerPtr->BmpIndex = BmpIndex;
 			playerPtr->MessageField = MessageField;
