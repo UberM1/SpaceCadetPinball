@@ -581,12 +581,6 @@ int TPinballTable::Message(MessageCode code, float value)
 			LightShowTimer = timer::set(time, this, LightShow_timeout);
 		}
 
-		if (pb::FullTiltMode)
-		{
-			// Multi-ball is FT exclusive feature, at least for now.
-			MultiballFlag = true;
-			JackpotScore = 500000;
-		}
 		// A table with its own table-level handler starts its own music there: the
 		// new-game arm of DRAGON.EXE's 0x424260 plays its idle track, which is TABC7
 		// and not the first of the set.
@@ -714,10 +708,19 @@ int TPinballTable::Message(MessageCode code, float value)
 		BonusScoreFlag = false;
 		JackpotScore = 20000;
 		JackpotScoreFlag = false;
+		// Full Tilt's Reset arm, 0x419e14..0x419e40 (identical in CADET.EXE, DRAGON.EXE
+		// and PIRATES.EXE): `mov ecx,0x4e20`, then ecx into both +0x172 (JackpotScore)
+		// and +0x17a (SuperJackpotScore), and eax=0 into their flags +0x176/+0x17e.
+		// Dragon's Keep overwrites both in its NewGame arm; Skulduggery and Space Cadet
+		// leave the super jackpot at this value. Nothing on Space Cadet reads it.
+		SuperJackpotScore = 20000;
+		SuperJackpotScoreFlag = false;
 		UnknownP71 = 0;
 		ExtraBalls = 0;
 		MultiballCount = 0;
 		BallLockedCounter = 0;
+		// +0x19a, 0x419e5e. The only writer that sets it is Space Cadet's own table
+		// handler (see control::table_control_handler); the bonus tables never do.
 		MultiballFlag = false;
 		UnknownP78 = 0;
 		ReplayActiveFlag = 0;

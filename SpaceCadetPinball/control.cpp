@@ -3035,6 +3035,20 @@ void control::table_control_handler(MessageCode code)
 		table_unlimited_balls = false;
 		lite77->Message(MessageCode::TLightFlasherStartTimed, 0.0);
 	}
+
+	// CADET.EXE's table handler 0x422c10, arm 0x3f6 (NewGame) at 0x422c4d:
+	//   mov [table+0x172],0x7a120   JackpotScore = 500000
+	//   mov [table+0x19a],1         MultiballFlag = 1
+	// then starts the first music track. This is Space Cadet's rule code, not the
+	// engine's: DRAGON.EXE and PIRATES.EXE never set +0x19a (their only writers are the
+	// table constructor and Reset arm, both storing 0). It used to live in
+	// TPinballTable's StartGamePlayer1 arm for every Full Tilt table. 3D Pinball has no
+	// multiball, hence the FullTiltMode gate.
+	if (code == MessageCode::NewGame && pb::FullTiltMode)
+	{
+		TableG->JackpotScore = 500000;
+		TableG->MultiballFlag = true;
+	}
 }
 
 

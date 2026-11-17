@@ -26,6 +26,16 @@ int TLight::Message(MessageCode code, float value)
 {
 	int bmpIndex;
 
+	// 0x40a490 (same bytes at the same address in CADET.EXE, DRAGON.EXE and PIRATES.EXE):
+	//   40a499 cmp byte [ecx+5],0 / jne        active: dispatch
+	//   40a4a1 cmp eax,0x402 / je              Reset: dispatch
+	//   40a4a8 cmp eax,0x3fe / je              PlayerChanged: dispatch
+	//   40a4af xor eax,eax / ret 8             anything else: ignored, answers 0
+	// Rules switch a light off this way (Dragon's Keep's v_lite113..115 between dragon
+	// fights); Reset() below turns it back on.
+	if (!ActiveFlag && code != MessageCode::Reset && code != MessageCode::PlayerChanged)
+		return 0;
+
 	switch (code)
 	{
 	case MessageCode::Reset:
@@ -255,6 +265,9 @@ int TLight::Message(MessageCode code, float value)
 
 void TLight::Reset()
 {
+	// 0x40a310, the virtual Reset (vtable +0x18), called from the constructor (0x40a21f)
+	// and from the Reset and PlayerChanged arms: 0x40a31c `mov byte [esi+5],1`.
+	ActiveFlag = 1;
 	if (TimeoutTimer)
 		timer::kill(TimeoutTimer);
 	if (UndoOverrideTimer)

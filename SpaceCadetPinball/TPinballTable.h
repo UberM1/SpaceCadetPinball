@@ -113,7 +113,8 @@ public:
 
 	// Full Tilt's second, larger jackpot, at +0x17a in the originals where
 	// JackpotScore is +0x172. Dragon's Keep's moat chute pays into it and its
-	// mouth sink pays it out; Space Cadet has no equivalent and leaves it zero.
+	// mouth sink pays it out. The table's Reset arm sets it to 20,000 (0x419e3a);
+	// Space Cadet never reads it.
 	int SuperJackpotScore{};
 	bool SuperJackpotScoreFlag{};
 	int UnknownP71{};
