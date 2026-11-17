@@ -32,6 +32,8 @@ void ft_sink_register(const char* name, void* comp, RectF aabb, int group, float
 void ft_accel_register(const FtAccelDbgEntry& e);
 void ft_rexit_register(const FtRexitDbgEntry& e);
 void ft_accel_tick(float dtSec);
+// FT_TABLETEST=tilt|players, see the end of FtAccelDebug.cpp.
+void ft_tabletest_tick(float dtSec);
 bool ft_accel_enabled();
 bool ft_autoplay_enabled();
 // FT_AUTODRAIN and FT_BLOCKDBG, read once like the two above.

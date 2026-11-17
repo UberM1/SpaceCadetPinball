@@ -402,7 +402,10 @@ void TPinballTable::tilt(float time)
 		if (pb::InfoTextBox)
 			pb::InfoTextBox->Display(pb::get_rc_string(Msg::STRING136), -1.0);
 		loader::play_sound(SoundIndex3, nullptr, "TPinballTable1");
-		TiltTimeoutTimer = timer::set(30.0, this, tilt_timeout);
+		// Full Tilt arms the timeout at 15 s, 0x41a25b..0x41a266 (`push 0x41a1b0` /
+		// `push 0x41700000` / call timer::set), the same bytes in CADET.EXE, DRAGON.EXE
+		// and PIRATES.EXE; 3D Pinball's 30 s is kept for PINBALL.DAT.
+		TiltTimeoutTimer = timer::set(pb::FullTiltMode ? 15.0f : 30.0f, this, tilt_timeout);
 
 		for (auto component : ComponentList)
 		{
@@ -491,7 +494,11 @@ int TPinballTable::Message(MessageCode code, float value)
 		break;
 	case MessageCode::StartGamePlayer1:
 		LightGroup->Message(MessageCode::TLightGroupReset, 0.0);
-		LightGroup->Message(MessageCode::TLightResetAndTurnOff, 0.0);
+		// Full Tilt sends the master group only the reset, 0x4197c3..0x4197cf (one
+		// `push 0x26` -- FT's TLightGroupReset -- then straight to the plunger), the same
+		// bytes in CADET.EXE; the second message is 3D Pinball's.
+		if (!pb::FullTiltMode)
+			LightGroup->Message(MessageCode::TLightResetAndTurnOff, 0.0);
 		Plunger->Message(MessageCode::PlungerStartFeedTimer, 0.0);
 		if (Demo && Demo->ActiveFlag)
 			rc_text = pb::get_rc_string(Msg::STRING131);
@@ -555,6 +562,10 @@ int TPinballTable::Message(MessageCode code, float value)
 				scorePtr->ExtraBalls = ExtraBalls;
 				scorePtr->BallLockedCounter = BallLockedCounter;
 				scorePtr->JackpotScore = JackpotScore;
+				// 0x41998c..0x419992: Full Tilt seeds each player's super jackpot slot
+				// (+0x92 of the 32-byte player record) from the table's +0x17a.
+				if (pb::FullTiltMode)
+					scorePtr->SuperJackpotScore = SuperJackpotScore;
 			}
 
 			BallCount = MaxBallCount;
@@ -618,6 +629,10 @@ int TPinballTable::Message(MessageCode code, float value)
 			PlayerScores[CurrentPlayer].ExtraBalls = ExtraBalls;
 			PlayerScores[CurrentPlayer].BallLockedCounter = BallLockedCounter;
 			PlayerScores[CurrentPlayer].JackpotScore = JackpotScore;
+			// Full Tilt keeps the super jackpot per player: saved at 0x419b9b..0x419baa
+			// and restored at 0x419bf4..0x419bfa, the same bytes in CADET.EXE.
+			if (pb::FullTiltMode)
+				PlayerScores[CurrentPlayer].SuperJackpotScore = SuperJackpotScore;
 
 			CurScore = nextScorePtr->Score;
 			CurScoreE9 = nextScorePtr->ScoreE9Part;
@@ -625,6 +640,8 @@ int TPinballTable::Message(MessageCode code, float value)
 			ExtraBalls = nextScorePtr->ExtraBalls;
 			BallLockedCounter = nextScorePtr->BallLockedCounter;
 			JackpotScore = nextScorePtr->JackpotScore;
+			if (pb::FullTiltMode)
+				SuperJackpotScore = nextScorePtr->SuperJackpotScore;
 
 			CurScoreStruct = nextScorePtr->ScoreStruct;
 			score::set(CurScoreStruct, CurScore);
@@ -867,6 +884,12 @@ void TPinballTable::tilt_timeout(int timerId, void* caller)
 	{
 		for (auto ball : table->BallList)
 		{
+			// Full Tilt drains only the balls it fed, 0x41a1f4..0x41a1fc
+			// (`cmp [ball+0x153],ebp / jne` past the Drain->Collision call): +0x153 is
+			// the placed-by-the-table flag, our HasGroupFlag. Without the skip a tilt
+			// drains Skulduggery's captive ball, and Reset never brings it back.
+			if (pb::FullTiltMode && ball->HasGroupFlag)
+				continue;
 			table->Drain->Collision(ball, &vec, &vec, 0.0, nullptr);
 		}
 	}

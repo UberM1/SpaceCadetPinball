@@ -387,6 +387,7 @@ void pb::frame(float dtMilliSec)
 {
 	ft_autodrain_tick(dtMilliSec*0.001f);
 	ft_accel_tick(dtMilliSec*0.001f); // FTDBG
+	ft_tabletest_tick(dtMilliSec*0.001f); // FTDBG
 	ft_restdump_tick(dtMilliSec*0.001f); // FTDBG
 	if (dtMilliSec > 100)
 		dtMilliSec = 100;
@@ -430,14 +431,18 @@ void pb::frame(float dtMilliSec)
 	timer::check();
 	render::update();
 	score::update(MainTable->CurScoreStruct);
-	if (!MainTable->TiltLockFlag)
+	// Full Tilt's frame, 0x411b03..0x411b6d, also wants no ball in the drain
+	// (`cmp [table+0x6a],0`) before the warning, and for the tilt itself a demo part
+	// that is absent or inactive (`[table+0x112]`, byte +5). Same in CADET.EXE.
+	if (!MainTable->TiltLockFlag && (!FullTiltMode || !MainTable->BallInDrainFlag))
 	{
 		if (nudge::nudge_count > 0.5f)
 		{
 			if (InfoTextBox)
 				InfoTextBox->Display(get_rc_string(Msg::STRING126), 2.0);
 		}
-		if (nudge::nudge_count > 1.0f)
+		if (nudge::nudge_count > 1.0f &&
+			(!FullTiltMode || !MainTable->Demo || !MainTable->Demo->ActiveFlag))
 			MainTable->tilt(time_now);
 	}
 }
@@ -744,16 +749,19 @@ void pb::InputDown(GameInput input)
 		case GameBindings::Plunger:
 			MainTable->Message(MessageCode::PlungerInputPressed, time_now);
 			break;
+		// Full Tilt's keydown, 0x41221a..0x412294, bumps only with a ball in play:
+		// each bump key returns unless `[table+0x192] >= 1` (MultiballCount) as well
+		// as `[table+0x1b2] == 0` (TiltLockFlag). Same in CADET.EXE.
 		case GameBindings::LeftTableBump:
-			if (!MainTable->TiltLockFlag)
+			if (!MainTable->TiltLockFlag && (!FullTiltMode || MainTable->MultiballCount >= 1))
 				nudge::nudge_right();
 			break;
 		case GameBindings::RightTableBump:
-			if (!MainTable->TiltLockFlag)
+			if (!MainTable->TiltLockFlag && (!FullTiltMode || MainTable->MultiballCount >= 1))
 				nudge::nudge_left();
 			break;
 		case GameBindings::BottomTableBump:
-			if (!MainTable->TiltLockFlag)
+			if (!MainTable->TiltLockFlag && (!FullTiltMode || MainTable->MultiballCount >= 1))
 				nudge::nudge_up();
 			break;
 		default: break;

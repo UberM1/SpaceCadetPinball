@@ -23,6 +23,8 @@ struct score_struct_super
 	int BallCount;
 	int ExtraBalls;
 	int BallLockedCounter;
+	// Full Tilt only: the player's super jackpot, +0x92 of the originals' record.
+	int SuperJackpotScore;
 };
 
 
