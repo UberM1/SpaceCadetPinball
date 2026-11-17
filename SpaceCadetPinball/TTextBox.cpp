@@ -73,6 +73,11 @@ int TTextBox::Message(MessageCode code, float value)
 void TTextBox::TimerExpired(int timerId, void* caller)
 {
 	auto tb = static_cast<TTextBox*>(caller);
+	if (pb::FullTiltMode)
+	{
+		tb->FtTimerExpired();
+		return;
+	}
 	TTextBoxMessage* message = tb->CurrentMessage;
 	tb->Timer = 0;
 	if (message)
@@ -113,7 +118,141 @@ void TTextBox::Clear(bool lowPriorityOnly)
 		delete message;
 	}
 	if (CurrentMessage)
-		Draw();
+	{
+		if (!pb::FullTiltMode)
+			Draw();
+		else if (FtSchedule())
+			Render();
+	}
+}
+
+// Full Tilt, 0x41d8e0: kill the display timer and free every queued message. Unlike
+// Clear() it leaves the box's pixels alone -- Display calls it and draws the new head
+// straight after.
+void TTextBox::FtClearQueue()
+{
+	if (Timer)
+	{
+		if (Timer != -1)
+			timer::kill(Timer);
+		Timer = 0;
+	}
+	while (CurrentMessage)
+	{
+		auto message = CurrentMessage;
+		CurrentMessage = message->NextMessage;
+		delete message;
+	}
+}
+
+// Full Tilt, 0x41dd30, the scheduler every queue change goes through. Returns whether
+// the head is to be drawn.
+//  - The timer is always re-armed from scratch (0x41dd35..0x41dd4a).
+//  - An untimed head returns at once with no timer at all (Timer stays 0;
+//    0x41dd58..0x41dd74). Display keeps an untimed message alone in the queue, so
+//    nothing waits behind it.
+//  - Heads more than 2 s past their end are dropped (0x41dd79..0x41ddd2, `fcomp -2.0`).
+//  - An empty queue, and only an empty queue, tells the rules: control code 0x46
+//    with the box as caller (0x41dddb), which is ControlTimerExpired. If the rules
+//    did not queue something in answer, the box is erased (0x41dde8 call 0x41d930).
+//  - Otherwise the head's remaining time, at least 0.25 s (0x41ddf8..0x41de0a),
+//    arms the timer whose callback is 0x41dce0 (FtTimerExpired).
+bool TTextBox::FtSchedule()
+{
+	if (Timer && Timer != -1)
+		timer::kill(Timer);
+	Timer = 0;
+
+	float timeLeft = 0.0f;
+	if (CurrentMessage)
+	{
+		if (CurrentMessage->Time == -1.0f)
+			return true;
+		while (CurrentMessage)
+		{
+			timeLeft = CurrentMessage->TimeLeft();
+			if (timeLeft > -2.0f)
+				break;
+			auto message = CurrentMessage;
+			CurrentMessage = message->NextMessage;
+			delete message;
+		}
+	}
+
+	if (!CurrentMessage)
+	{
+		control::handler(MessageCode::ControlTimerExpired, this);
+		if (!CurrentMessage)
+			Clear();
+		return false;
+	}
+
+	if (timeLeft < 0.25f)
+		timeLeft = 0.25f;
+	Timer = timer::set(timeLeft, this, TimerExpired);
+	return true;
+}
+
+// Full Tilt, 0x41dce0: drop the head that has run its time, reschedule, and draw the
+// new head if there is one to draw. No message to the rules here; the scheduler sends
+// it once the queue is empty.
+void TTextBox::FtTimerExpired()
+{
+	Timer = 0;
+	if (!CurrentMessage)
+		return;
+	auto message = CurrentMessage;
+	CurrentMessage = message->NextMessage;
+	delete message;
+	if (FtSchedule())
+		Render();
+}
+
+// Full Tilt, TTextBox::Display 0x41de40, which differs from upstream's in what an
+// untimed message does to the queue (CADET.EXE has the same code at the same
+// addresses, so this is the Full Tilt engine's and not a bonus-table rule):
+//  - Same text in the same font as the last queued message (0x41de55..0x41dea5):
+//    if both the head and the new message are untimed, nothing happens; if the new
+//    one is timed, the last message takes the new time and the queue is rescheduled
+//    (0x41dee3..0x41df06), without a redraw. Same text but untimed after a timed
+//    head falls through to a fresh message.
+//  - An untimed head is thrown away by any new message (0x41df19..0x41df33).
+//  - An untimed new message throws away the whole queue (0x41df38..0x41df4c), so it
+//    shows at once instead of waiting behind the timed messages still queued.
+//  - The new message is appended, the queue rescheduled and the head drawn
+//    (0x41e019..0x41e035).
+void TTextBox::FtDisplay(const char* text, float time, bool lowPriority, bool glyph)
+{
+	if (CurrentMessage && !strcmp(text, PreviousMessage->Text) && PreviousMessage->Glyph == glyph)
+	{
+		if (CurrentMessage->Time == -1.0f && time == -1.0f)
+			return;
+		if (time != -1.0f)
+		{
+			PreviousMessage->Refresh(time);
+			FtSchedule();
+			return;
+		}
+	}
+
+	if (CurrentMessage && CurrentMessage->Time == -1.0f)
+		FtClearQueue();
+	if (time == -1.0f)
+		FtClearQueue();
+
+	auto message = new TTextBoxMessage(text, time, lowPriority, glyph);
+	if (!message->Text)
+	{
+		delete message;
+		return;
+	}
+	if (CurrentMessage)
+		PreviousMessage->NextMessage = message;
+	else
+		CurrentMessage = message;
+	PreviousMessage = message;
+	FtSchedule();
+	Render();
 }
 
 score_msg_font_type* TTextBox::FontFor(const TTextBoxMessage* message) const
@@ -140,6 +279,12 @@ void TTextBox::DisplayInternal(const char* text, float time, bool lowPriority, b
 {
 	if (!text)
 		return;
+
+	if (pb::FullTiltMode)
+	{
+		FtDisplay(text, time, lowPriority, glyph);
+		return;
+	}
 
 	// The de-duplication has to take the font into account as well as the text: a
 	// glyph token and a piece of ordinary text can be the same string ("K", "5") and
@@ -221,20 +366,6 @@ void TTextBox::DrawImGui()
 
 void TTextBox::Draw()
 {
-	auto bmp = BgBmp;
-	if (bmp)
-		gdrv::copy_bitmap(
-			render::vscreen,
-			Width,
-			Height,
-			OffsetX,
-			OffsetY,
-			bmp,
-			OffsetX,
-			OffsetY);
-	else
-		gdrv::fill_bitmap(render::vscreen, Width, Height, OffsetX, OffsetY, 0);
-
 	bool display = false;
 	while (CurrentMessage)
 	{
@@ -260,6 +391,31 @@ void TTextBox::Draw()
 	}
 
 	if (display)
+		Render();
+	else
+		Render(false);
+}
+
+// The drawing half of upstream's Draw: repaint the box's background, then the head
+// message unless `withText` is false. Split out so the Full Tilt scheduler can decide
+// what is shown and leave the drawing to the same code.
+void TTextBox::Render(bool withText)
+{
+	auto bmp = BgBmp;
+	if (bmp)
+		gdrv::copy_bitmap(
+			render::vscreen,
+			Width,
+			Height,
+			OffsetX,
+			OffsetY,
+			bmp,
+			OffsetX,
+			OffsetY);
+	else
+		gdrv::fill_bitmap(render::vscreen, Width, Height, OffsetX, OffsetY, 0);
+
+	if (withText && CurrentMessage)
 	{
 		if (!Font)
 		{

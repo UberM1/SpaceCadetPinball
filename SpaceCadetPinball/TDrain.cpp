@@ -4,6 +4,7 @@
 
 #include "control.h"
 #include "loader.h"
+#include "pb.h"
 #include "TBall.h"
 #include "timer.h"
 #include "TPinballTable.h"
@@ -18,6 +19,21 @@ TDrain::TDrain(TPinballTable* table, int groupIndex) : TCollisionComponent(table
 
 int TDrain::Message(MessageCode code, float value)
 {
+	// Full Tilt, 0x418777 `cmp eax,0x3f3` -> 0x418792..0x4187a9: SetTiltLock kills the
+	// end-of-ball timer and does nothing else (BallInDrainFlag and the per-player
+	// fields stay). Dragon's Keep's ball save sends it to its drain (0x424973) so the
+	// timer its drained ball armed cannot serve a second ball after the relaunch.
+	// CADET.EXE has the same arm at the same address; gated so 3D Pinball keeps
+	// upstream's drain.
+	if (code == MessageCode::SetTiltLock && pb::FullTiltMode)
+	{
+		if (Timer)
+		{
+			timer::kill(Timer);
+			Timer = 0;
+		}
+		return 0;
+	}
 	if (code == MessageCode::Reset)
 	{
 		if (Timer)
