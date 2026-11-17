@@ -93,10 +93,17 @@ inline size_t pgm_save(int width, int height, char* data, FILE* outfile)
 	return n;
 }
 
-inline float RandFloat()
-{
-	return static_cast<float>(std::rand() / static_cast<double>(RAND_MAX));
-}
+// The engine's rand(), defined in pb.cpp. On Full Tilt data it is the C runtime
+// rand() the Full Tilt EXEs link statically: MSVC's LCG on one process-wide seed that
+// starts at 1 and is never reseeded (DRAGON.EXE 0x42c4cb / seed 0x43bc74, PIRATES.EXE
+// 0x42dd0b / 0x43d23c, CADET.EXE 0x42acdb / 0x439b1c). The engine's call sites and the
+// table rules draw from that one sequence, so the order of draws decides what each pick
+// gets (docs/engine-changes.md section 35). On 3D Pinball data it is the host rand().
+int EngineRand();
+
+// rand() / RAND_MAX. Full Tilt's RAND_MAX is 0x7fff: the EXEs multiply by 1/32767
+// (3.051851e-05).
+float RandFloat();
 
 template <typename T>
 constexpr int Sign(T val)

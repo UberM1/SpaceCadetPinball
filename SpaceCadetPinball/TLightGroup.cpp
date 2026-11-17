@@ -3,6 +3,7 @@
 
 
 #include "control.h"
+#include "pb.h"
 #include "loader.h"
 #include "timer.h"
 #include "TLight.h"
@@ -166,12 +167,16 @@ int TLightGroup::Message(MessageCode code, float value)
 				start_animation();
 			MessageField2 = code;
 			AnimationFlag = 0;
-			for (auto light : List)
+			// Full Tilt's loop stops one short: `for (i = 0; i < count - 1; i++)`
+			// (DRAGON/PIRATES/CADET.EXE 0x40b407..0x40b483), so the last light is never
+			// lit and draws nothing. The draw count decides every later rand() pick.
+			const auto lightCount = pb::FullTiltMode && count > 0 ? count - 1 : count;
+			for (auto index = 0; index < lightCount; index++)
 			{
-				if (rand() % 100 > 70)
+				if (EngineRand() % 100 > 70)
 				{
 					auto randVal = RandFloat() * value * 3.0f + 0.1f;
-					light->Message(MessageCode::TLightTurnOnTimed, randVal);
+					List[index]->Message(MessageCode::TLightTurnOnTimed, randVal);
 				}
 			}
 			reschedule_animation(value);
@@ -183,10 +188,12 @@ int TLightGroup::Message(MessageCode code, float value)
 				start_animation();
 			MessageField2 = code;
 			AnimationFlag = 0;
-			for (auto light : List)
+			// One short in Full Tilt as well (0x40b4cc..0x40b52c).
+			const auto lightCount = pb::FullTiltMode && count > 0 ? count - 1 : count;
+			for (auto index = 0; index < lightCount; index++)
 			{
-				auto randVal = static_cast<float>(rand() % 100 > 70);
-				light->Message(MessageCode::TLightResetAndToggleValue, randVal);
+				auto randVal = static_cast<float>(EngineRand() % 100 > 70);
+				List[index]->Message(MessageCode::TLightResetAndToggleValue, randVal);
 			}
 			reschedule_animation(value);
 			break;
@@ -202,7 +209,7 @@ int TLightGroup::Message(MessageCode code, float value)
 			if (!noBmpInd1Count)
 				break;
 
-			auto randModCount = rand() % noBmpInd1Count;
+			auto randModCount = EngineRand() % noBmpInd1Count;
 			for (auto it = List.rbegin(); it != List.rend(); ++it)
 			{
 				auto light = *it;
@@ -228,7 +235,7 @@ int TLightGroup::Message(MessageCode code, float value)
 			if (!bmpInd1Count)
 				break;
 
-			auto randModCount = rand() % bmpInd1Count;
+			auto randModCount = EngineRand() % bmpInd1Count;
 			for (auto it = List.rbegin(); it != List.rend(); ++it)
 			{
 				auto light = *it;

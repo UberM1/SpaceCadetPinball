@@ -43,6 +43,25 @@ int pb::quickFlag = 0;
 TTextBox *pb::InfoTextBox, *pb::MissTextBox;
 int pb::AlternateBallSkin = 0;
 
+// pch.h. The seed is 1 at process start, as in the Full Tilt EXEs' .data, and nothing
+// writes it but rand() itself.
+static unsigned int CrtRandSeed = 1;
+
+int EngineRand()
+{
+	if (!pb::FullTiltMode)
+		return std::rand();
+	CrtRandSeed = CrtRandSeed * 214013u + 2531011u;
+	return static_cast<int>((CrtRandSeed >> 16) & 0x7fff);
+}
+
+float RandFloat()
+{
+	if (!pb::FullTiltMode)
+		return static_cast<float>(std::rand() / static_cast<double>(RAND_MAX));
+	return static_cast<float>(EngineRand() / 32767.0);
+}
+
 
 int pb::init()
 {

@@ -177,6 +177,12 @@ int loader::get_sound_id(int groupIndex)
 
 				sound_list[soundIndex].Duration = duration;
 				sound_list[soundIndex].WavePtr = Sound::LoadWaveFile(filePath);
+				// Full Tilt stores the duration only once the wave is loaded
+				// (0x40ccd1 zeroes it; 0x40cd4c writes it after 0x41e710 succeeds, and
+				// 0x41e710 fails at once with no sound device). Without audio every
+				// duration is 0, which is what times the new-game light show.
+				if (pb::FullTiltMode && !sound_list[soundIndex].WavePtr)
+					sound_list[soundIndex].Duration = 0.0f;
 			}
 		}
 	}
