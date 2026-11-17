@@ -133,5 +133,18 @@ void TSink::TimerExpired(int timerId, void* caller)
 			sink->ThrowSpeedMult2);
 		if (sink->SoundIndex3)
 			loader::play_sound(sink->SoundIndex3, ball, "TSink2");
+		// Full Tilt tells the rules the ball is out: 0x418640 push esi / 0x418641 push
+		// 0x46 / 0x418643 call control::handler. Only on this path; the occupied re-arm
+		// above returns without it. Same bytes in CADET.EXE; 3D Pinball data keeps
+		// upstream's silence. See docs/engine-changes.md for which handlers react.
+		if (pb::FullTiltMode)
+		{
+			const int jackpotBefore = table->JackpotScore; // FTDBG
+			control::handler(MessageCode::ControlTimerExpired, sink);
+			if (ft_accel_enabled() || ft_autoplay_enabled())
+				fprintf(stderr, "DBG-sink  NOTIFY %-12s ControlTimerExpired jackpot %d -> %d\n",
+				        sink->GroupName ? sink->GroupName : "?", jackpotBefore,
+				        table->JackpotScore); // FTDBG
+		}
 	}
 }

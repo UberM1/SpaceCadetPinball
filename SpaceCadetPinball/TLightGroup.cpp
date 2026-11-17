@@ -8,6 +8,7 @@
 #include "timer.h"
 #include "TLight.h"
 #include "TPinballTable.h"
+#include "FtAccelDebug.h" // FTDBG
 
 TLightGroup::TLightGroup(TPinballTable* table, int groupIndex) : TPinballComponent(table, groupIndex, false)
 {
@@ -52,7 +53,16 @@ int TLightGroup::Message(MessageCode code, float value)
 			MessageField = playerPtr->MessageField;
 			MessageField2 = playerPtr->MessageField2;
 			Timer1Time = playerPtr->Timer1Time;
-			if (!(MessageField == 0))
+			// Full Tilt resumes the incoming player's animation by testing the
+			// restored animation code, +0x52 (0x40bc2a mov [esi+0x52],ecx / 0x40bc2d
+			// test ecx,ecx / 0x40bc37 call 0x40ada0), not MessageField. Same bytes in
+			// CADET.EXE; 3D Pinball data keeps upstream's test.
+			if (ft_autoplay_enabled())
+				fprintf(stderr, "DBG-pc    group %s -> player %d anim=%d field=%d%s\n",
+				        GroupName ? GroupName : "?", static_cast<int>(floor(value)),
+				        static_cast<int>(MessageField2), MessageField,
+				        MessageField2 != MessageCode::TLightGroupNull ? " resumed" : ""); // FTDBG
+			if (pb::FullTiltMode ? MessageField2 != MessageCode::TLightGroupNull : MessageField != 0)
 				TimerExpired(0, this);
 			break;
 		}
@@ -82,6 +92,11 @@ int TLightGroup::Message(MessageCode code, float value)
 			}
 			AnimationFlag = 1;
 			MessageField2 = code;
+			// Full Tilt shifts only the on/off state: the step arms (0x40b00f backward,
+			// 0x40b0fc forward) send TurnOn/TurnOff and never store to a light's
+			// MessageField (+6). Same bytes in CADET.EXE; 3D Pinball data keeps
+			// upstream's copy.
+			const bool copyMessageField = !pb::FullTiltMode;
 			auto lastMessage = lastLight->MessageField;
 			auto lastStatus = lastLight->LightOnFlag;
 			for (auto index = count - 1; index > 0; --index)
@@ -89,11 +104,13 @@ int TLightGroup::Message(MessageCode code, float value)
 				auto lightCur = List.at(index);
 				auto lightPrev = List.at(index - 1);
 				lightCur->Message(lightPrev->LightOnFlag ? MessageCode::TLightTurnOn : MessageCode::TLightTurnOff, 0.0);
-				lightCur->MessageField = lightPrev->MessageField;
+				if (copyMessageField)
+					lightCur->MessageField = lightPrev->MessageField;
 			}
 			auto firstLight = List.at(0);
 			firstLight->Message(lastStatus ? MessageCode::TLightTurnOn : MessageCode::TLightTurnOff, 0.0);
-			firstLight->MessageField = lastMessage;
+			if (copyMessageField)
+				firstLight->MessageField = lastMessage;
 			reschedule_animation(value);
 			break;
 		}
@@ -109,6 +126,8 @@ int TLightGroup::Message(MessageCode code, float value)
 			auto firstLight = List.at(0);
 			AnimationFlag = 1;
 			MessageField2 = code;
+			// See StepBackward: no MessageField copy on Full Tilt data.
+			const bool copyMessageField = !pb::FullTiltMode;
 			auto firstMessage = firstLight->MessageField;
 			auto firstStatus = firstLight->LightOnFlag;
 			for (auto index = 0; index < count - 1; index++)
@@ -116,10 +135,12 @@ int TLightGroup::Message(MessageCode code, float value)
 				auto lightCur = List.at(index);
 				auto lightNext = List.at(index + 1);
 				lightCur->Message(lightNext->LightOnFlag ? MessageCode::TLightTurnOn : MessageCode::TLightTurnOff, 0.0);
-				lightCur->MessageField = lightNext->MessageField;
+				if (copyMessageField)
+					lightCur->MessageField = lightNext->MessageField;
 			}
 			lastLight->Message(firstStatus ? MessageCode::TLightTurnOn : MessageCode::TLightTurnOff, 0.0);
-			lastLight->MessageField = firstMessage;
+			if (copyMessageField)
+				lastLight->MessageField = firstMessage;
 			reschedule_animation(value);
 			break;
 		}
