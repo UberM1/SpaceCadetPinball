@@ -57,8 +57,8 @@ namespace pirates
 //   MultiplierIsValue, MovingBlockers, ModeRegister, ModeControl, ModeBeforeComponent,
 //   ResetRules, BallDrained, CurrentRank, CurrentMode,
 //   MusicPrefix, MusicTrackCount, SettingsPrefix, RcStrings, RcStringCount,
-//   UnstuckBoundsExtra, TableControl, KeyHandler (trailing, so rows that leave them
-//   out get nullptr)
+//   UnstuckBoundsExtra, TableControl, KeyHandler, PlayerTextTime (trailing, so rows
+//   that leave them out get nullptr / 0)
 static const TableRules TableRegistry[] =
 {
 	// The same table in three releases: one set of rules, three data files. The
@@ -72,6 +72,8 @@ static const TableRules TableRegistry[] =
 		false, false, &control_lite198_tag, &control::MissionControl, false,
 		nullptr, nullptr, nullptr, nullptr,
 		"TABA", 3, "CADET", nullptr, 0,
+		nullptr, nullptr, nullptr,
+		6.0f, // CADET.EXE 0x42a750's Player N arms
 	},
 	{
 		TableId::SpaceCadet3DPB, "3D Pinball Space Cadet", "PINBALL.DAT", false, false,
@@ -133,7 +135,10 @@ static const TableRules TableRegistry[] =
 #if FULLTILT_HAVE_BONUS_RULES
 		&pirates::TableControl,
 		&pirates::KeyHandler,
+#else
+		nullptr, nullptr,
 #endif
+		1.0f, // PIRATES.EXE 0x422b90's Player N arms
 	},
 };
 

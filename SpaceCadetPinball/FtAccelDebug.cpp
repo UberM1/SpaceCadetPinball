@@ -764,3 +764,134 @@ void ft_accel_tick(float dtSec)
 	target++;
 }
 // ---- end FTDBG ----
+
+// ---- FTDBG: table-level checks (docs/engine-changes.md sections 38-40) ----
+// FT_TABLETEST=tilt: start a game, tilt with the first ball in the lane, and log the
+// tilt timeout's game time and every table-placed ball before and after it.
+// FT_TABLETEST=players: a two-player game; stamp each player's super jackpot, drain,
+// and log the value each player gets back. Both exit when done. Inert without the
+// variable (one getenv per process).
+#include "options.h"
+#include "TDrain.h"
+
+static void tabletest_balls(const char* tag, TPinballTable* t)
+{
+	for (auto b : t->BallList)
+		if (b->HasGroupFlag)
+			fprintf(stderr, "DBG-table %s placed ball active=%d pos=(%.3f,%.3f)\n", tag, b->ActiveFlag ? 1 : 0,
+			        b->Position.X, b->Position.Y);
+	fprintf(stderr, "DBG-table %s multiball=%d tiltlock=%d ballcount=%d player=%d\n", tag, t->MultiballCount,
+	        t->TiltLockFlag, t->BallCount, t->CurrentPlayer);
+}
+
+static TBall* tabletest_fed_ball(TPinballTable* t)
+{
+	for (auto b : t->BallList)
+		if (b->ActiveFlag && !b->HasGroupFlag)
+			return b;
+	return nullptr;
+}
+
+void ft_tabletest_tick(float dtSec)
+{
+	static int mode = -1;
+	if (mode < 0)
+	{
+		auto e = getenv("FT_TABLETEST");
+		mode = !e ? 0 : !strcmp(e, "tilt") ? 1 : !strcmp(e, "players") ? 2 : 0;
+	}
+	auto t = pb::MainTable;
+	if (!mode || !t)
+		return;
+
+	static float now = 0.0f, mark = 0.0f;
+	static int stage = 0;
+	now += dtSec;
+
+	if (stage == 0 && now > 1.0f)
+	{
+		if (mode == 2)
+			options::Options.Players = 2;
+		pb::replay_level(false);
+		stage = 1;
+		return;
+	}
+	auto fed = tabletest_fed_ball(t);
+	bool atRest = fed && t->MultiballCount >= 1 && !t->BallInDrainFlag && fed->Speed < 0.5f;
+
+	if (mode == 1)
+	{
+		// The fed ball is pinned where it was tilted, so nothing but the timeout can
+		// end the tilt (a launched ball would drain and clear it first).
+		static TBall* pinned = nullptr;
+		static vector3 pinPos{};
+		if (stage == 1 && atRest && now > 8.0f)
+		{
+			tabletest_balls("before-tilt", t);
+			pinned = fed;
+			pinPos = fed->Position;
+			t->tilt(pb::time_now);
+			fprintf(stderr, "DBG-table tilt at game time %.3f, timer=%d\n", pb::time_now, t->TiltTimeoutTimer);
+			mark = pb::time_now;
+			stage = 2;
+		}
+		else if (stage == 2 && t->TiltTimeoutTimer && pinned->ActiveFlag)
+		{
+			pinned->Position = pinPos;
+			pinned->Speed = 0.0f;
+			static int lastLock = -1;
+			if (t->TiltLockFlag != lastLock)
+				fprintf(stderr, "DBG-table %.3f s into the tilt: multiball=%d tiltlock=%d\n", pb::time_now - mark, t->MultiballCount,
+				        lastLock = t->TiltLockFlag);
+		}
+		else if (stage == 2 && !t->TiltTimeoutTimer)
+		{
+			// tiltlock is printed every time it changes above, so a tilt cleared early
+			// by something else (a ball feed calls tilt_no_more) shows up there.
+			fprintf(stderr, "DBG-table tilt timer gone after %.3f s of game time\n", pb::time_now - mark);
+			tabletest_balls("after-timeout", t);
+			mark = now;
+			stage = 3;
+		}
+		else if (stage == 3 && now - mark > 6.0f)
+		{
+			tabletest_balls("6s-later", t);
+			fflush(nullptr);
+			std::_Exit(0);
+		}
+		return;
+	}
+
+	// mode 2: per-player super jackpot.
+	static int lastPlayer = -1, changes = 0;
+	static const int stamp[2] = {1111111, 2222222};
+	if (stage >= 1 && atRest && now - mark > 2.0f)
+	{
+		if (t->CurrentPlayer != lastPlayer)
+		{
+			fprintf(stderr, "DBG-table player %d up: super jackpot %d (jackpot %d)\n", t->CurrentPlayer + 1,
+			        t->SuperJackpotScore, t->JackpotScore);
+			if (lastPlayer >= 0 && ++changes >= 3)
+			{
+				fflush(nullptr);
+				std::_Exit(0);
+			}
+			lastPlayer = t->CurrentPlayer;
+			if (changes < 2)
+			{
+				t->SuperJackpotScore = stamp[t->CurrentPlayer & 1];
+				fprintf(stderr, "DBG-table player %d: super jackpot set to %d\n", t->CurrentPlayer + 1,
+				        t->SuperJackpotScore);
+			}
+		}
+		vector2 dummy{};
+		t->Drain->Collision(fed, &dummy, &dummy, 0.0f, nullptr);
+		mark = now;
+	}
+	if (now > 120.0f)
+	{
+		fprintf(stderr, "DBG-table players: gave up\n");
+		std::_Exit(1);
+	}
+}
+// ---- end FTDBG ----

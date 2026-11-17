@@ -259,6 +259,22 @@ int winmain::WinMain(LPCSTR lpCmdLine)
 		SDL_ShowWindow(window);
 		fullscrn::set_screen_mode(Options.FullScreen);
 
+		// Full Tilt waits 2 s before the first game or demo, WinMain 0x4221b0..0x4221f2:
+		// a timeGetTime loop (`cmp eax,0x7d0 / jae`) around PeekMessage(PM_REMOVE) with
+		// no dispatch, so input typed meanwhile is dropped. Same in CADET.EXE. Window and
+		// quit events stay queued for MainLoop; input is flushed as the original drops it.
+		// Wall-clock only: no pb::frame runs, so game time does not advance.
+		if (pb::FullTiltMode)
+		{
+			const auto waitStart = SDL_GetTicks();
+			while (SDL_GetTicks() - waitStart < 2000)
+			{
+				SDL_PumpEvents();
+				SDL_FlushEvents(SDL_KEYDOWN, SDL_MULTIGESTURE);
+				SDL_Delay(10);
+			}
+		}
+
 		if (strstr(lpCmdLine, "-demo"))
 			pb::toggle_demo();
 		else
